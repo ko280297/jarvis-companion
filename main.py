@@ -9,6 +9,7 @@ from tts import speak
 from memory import MemoryStore
 from datetime import date, timedelta
 from tools import answer_time_question
+from online import answer_online_question
 
 SAMPLE_RATE = 16000
 CHUNK = 1280            # 80 ms
@@ -137,6 +138,11 @@ def main():
         if tool_answer:
             print(f"🕐 {tool_answer}")
             speak(tool_answer)
+            continue
+        online_answer = answer_online_question(text)
+        if online_answer:
+            print(f"AI:  {online_answer}")
+            speak(online_answer)
             continue
         found = memory.search(text)
         messages = list(history)
