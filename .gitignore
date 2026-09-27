@@ -1,2 +1,4 @@
 .venv/ 
 *.onnx 
+__pycache__/ 
+*.db 
