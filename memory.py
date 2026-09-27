@@ -23,6 +23,9 @@ class MemoryStore:
             "CREATE TABLE IF NOT EXISTS memories "
             "(id INTEGER PRIMARY KEY, text TEXT, created REAL, vec BLOB)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+        )
         self.db.commit()
 
     def add(self, text):
@@ -32,9 +35,9 @@ class MemoryStore:
             (text, time.time(), vec.tobytes()),
         )
         self.db.commit()
-        
+
     def all(self):
-      return [t for (t,) in self.db.execute("SELECT text FROM memories ORDER BY id")]
+        return [t for (t,) in self.db.execute("SELECT text FROM memories ORDER BY id")]
 
     def forget_last(self):
         row = self.db.execute(
@@ -55,14 +58,24 @@ class MemoryStore:
         scored.sort(reverse=True)
         return [(round(s, 2), t) for s, t in scored[:k] if s >= min_score]
 
+    def set_setting(self, key, value):
+        self.db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+        )
+        self.db.commit()
+
+    def get_setting(self, key):
+        row = self.db.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
 
 if __name__ == "__main__":
     m = MemoryStore("test_memories.db")
     m.add("My meeting with Rahul is on Friday about the budget.")
     m.add("I kept my passport in the blue drawer.")
-    m.add("Priya's birthday is on 12 October.")
     for q in ["When is my meeting with Rahul?",
               "Where is my passport?",
-              "When is Priya's birthday?",
               "What is my favourite colour?"]:
         print(q, "->", m.search(q))

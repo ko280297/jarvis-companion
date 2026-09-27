@@ -1,4 +1,6 @@
+import re
 import time
+from datetime import date
 import numpy as np
 import requests
 import sounddevice as sd
@@ -7,7 +9,6 @@ from openwakeword.model import Model as WakeModel
 from pywhispercpp.model import Model as SttModel
 from tts import speak
 from memory import MemoryStore
-from datetime import date, timedelta
 from tools import answer_time_question
 from online import answer_online_question
 
@@ -25,7 +26,9 @@ SYSTEM_PROMPT = (
     "If the user's saved memories answer the question, use them. "
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
-    "If you are not sure about something, say you don't know instead of guessing."
+    "If you are not sure about something, say you don't know instead of guessing.",
+    "You cannot perform actions or change settings. ",
+    "Never say you saved, set, or changed anything."
 )
 
 
@@ -50,20 +53,20 @@ def wait_for_wake_word_and_record(wake):
     return np.concatenate(frames).astype(np.float32) / 32768.0
 
 
-def transcribe(stt, audio):
-    segments = stt.transcribe(audio)
+def transcribe(stt, audio, memory):
+    # Hint whisper with names the user has saved themselves (nothing hardcoded)
+    words = set()
+    for t in memory.all():
+        t = t.split(" (saved on")[0]          # dates are not names, keep them out of the hint
+        words.update(re.findall(r"\b[A-Z][a-z]+", t))
+    city = memory.get_setting("home_city")
+    if city:
+        words.add(city)
+    hint = ", ".join(sorted(words))
+    segments = stt.transcribe(audio, initial_prompt=hint)
     return " ".join(s.text.strip() for s in segments).strip()
 
-def upcoming_days(n=14):
-    """Python does the date maths, so the LLM only has to look things up."""
-    today = date.today()
-    lines = []
-    for d in range(n):
-        day = today + timedelta(days=d)
-        label = " (today)" if d == 0 else " (tomorrow)" if d == 1 else ""
-        lines.append(day.strftime("%A, %d %B %Y") + label)
-    return "\n".join(lines)
-  
+
 def think(messages):
     response = requests.post(OLLAMA_URL, json={
         "model": LLM_MODEL,
@@ -77,8 +80,19 @@ def think(messages):
 
 
 def handle_command(text, memory, history):
-    """Handle remember / forget / list commands. Returns True if handled."""
+    """Handle city / remember / forget / list commands. Returns True if handled."""
     lower = text.lower().strip(" .!?,")
+
+    m = re.match(
+        r"(?:my (?:current |home )?city is"
+        r"|(?:set|change) my (?:current |home )?city (?:to|as)"
+        r"|i live in)\s+(.+)", lower)
+    if m:
+        city = m.group(1).strip().title()
+        memory.set_setting("home_city", city)
+        print(f"🏠 Home city set: {city}")
+        speak(f"Got it, your city is {city}.")
+        return True
 
     if lower.startswith("remember"):
         fact = text[len("remember"):].strip(" ,.")
@@ -90,7 +104,7 @@ def handle_command(text, memory, history):
         fact = f"{fact} (saved on {date.today():%A, %d %B %Y})"
         memory.add(fact)
         print(f"💾 Saved: {fact}")
-        speak("Okay, I'll remember that.")
+        speak(f"Okay, I'll remember: {fact.split(' (saved on')[0]}")
         return True
 
     if lower.startswith("forget that") or lower == "forget it":
@@ -126,7 +140,7 @@ def main():
 
     while True:
         audio = wait_for_wake_word_and_record(wake)
-        text = transcribe(stt, audio)
+        text = transcribe(stt, audio, memory)
         if not text or text.startswith("[") or text.startswith("("):
             print("Didn't catch anything.")
             continue
@@ -134,20 +148,24 @@ def main():
 
         if handle_command(text, memory, history):
             continue
+
         tool_answer = answer_time_question(text)
         if tool_answer:
             print(f"🕐 {tool_answer}")
             speak(tool_answer)
             continue
-        online_answer = answer_online_question(text)
+
+        online_answer = answer_online_question(text, memory.get_setting("home_city"))
         if online_answer:
             print(f"AI:  {online_answer}")
             speak(online_answer)
             continue
+
         found = memory.search(text)
         messages = list(history)
         now = time.strftime("%A, %d %B %Y, %I:%M %p")
-        messages.append({"role": "system", "content": f"Current local date and time: {now}"})
+        messages.append({"role": "system", "content":
+            f"Current local date and time (reference only, this is NOT the user's plans): {now}"})
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
             print(f"📚 Using memory:\n{facts}")

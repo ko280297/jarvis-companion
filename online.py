@@ -4,7 +4,6 @@ import time
 import xml.etree.ElementTree as ET
 import requests
 
-DEFAULT_CITY = "Bengaluru"          # change to your city
 LOG_FILE = "online_log.jsonl"
 TIMEOUT = 5
 NEWS_FEED = "https://feeds.bbci.co.uk/news/world/rss.xml"
@@ -43,20 +42,32 @@ def _get(tool, sent, url, params=None):
         raise
 
 
-def _extract_city(t):
-    m = re.search(
-        r"\b(?:in|at|for)\s+([a-z][a-z\s]*?)"
-        r"(?:\s+(?:today|tomorrow|now|right now|this week))?[?.!]*$", t)
-    return m.group(1).strip().title() if m else DEFAULT_CITY
+NOT_CITIES = {"rain", "today", "tomorrow", "now", "right now", "this week", "the week"}
 
+def _extract_city(t, home_city):
+    m = re.search(
+        r"\b(?:in|at|for|of)\s+([a-z][a-z\s]*?)"
+        r"(?:\s+(?:today|tomorrow|now|right now|this week))?[?.!]*$", t)
+    if m and m.group(1).strip() not in NOT_CITIES:
+        return m.group(1).strip().title()
+    return home_city
+
+def _geocode(city):
+    """Pick the most populated match, and retry without spaces ('Shah Jahanpur' -> 'Shahjahanpur')."""
+    for name in dict.fromkeys([city, city.replace(" ", "")]):
+        geo = _get("weather", name,
+                   "https://geocoding-api.open-meteo.com/v1/search",
+                   {"name": name, "count": 10}).json()
+        results = geo.get("results")
+        if results:
+            return max(results, key=lambda r: r.get("population") or 0)
+    return None
 
 def get_weather(city, when="today"):
-    geo = _get("weather", city,
-               "https://geocoding-api.open-meteo.com/v1/search",
-               {"name": city, "count": 1}).json()
-    if not geo.get("results"):
+    place = _geocode(city)
+    if place is None:
         return f"I couldn't find a place called {city}."
-    place = geo["results"][0]
+    label = f"{place['name']}, {place['country']}" if place.get("country") else place["name"]
     lat, lon = place["latitude"], place["longitude"]
 
     data = _get("weather", f"{lat:.2f},{lon:.2f}",
@@ -74,11 +85,11 @@ def get_weather(city, when="today"):
 
     if when == "tomorrow":
         desc = WEATHER_CODES.get(day["weather_code"][i], "mixed conditions")
-        answer = f"Tomorrow in {place['name']}: {desc}, with a high of {high} and a low of {low} degrees."
+        answer = f"Tomorrow in {label}: {desc}, with a high of {high} and a low of {low} degrees."
     else:
         cur = data["current"]
         desc = WEATHER_CODES.get(cur["weather_code"], "mixed conditions")
-        answer = (f"In {place['name']} it's {round(cur['temperature_2m'])} degrees right now, {desc}. "
+        answer = (f"In {label} it's {round(cur['temperature_2m'])} degrees right now, {desc}. "
                   f"Today's high is {high} and the low is {low}.")
 
     rain = day["precipitation_probability_max"][i]
@@ -93,13 +104,16 @@ def get_news(n=3):
     return "Top headlines. " + ". ".join(titles) + "."
 
 
-def answer_online_question(text):
+def answer_online_question(text, home_city=None):
     """The ONLY place the device touches the internet. Returns None if not an online question."""
     t = text.lower()
     try:
         if WEATHER_Q.search(t):
+            city = _extract_city(t, home_city)
+            if not city:
+                return "Which city should I check? You can say: my city is Pune."
             when = "tomorrow" if "tomorrow" in t else "today"
-            return get_weather(_extract_city(t), when)
+            return get_weather(city, when)
         if NEWS_Q.search(t):
             return get_news()
     except requests.RequestException:
@@ -109,9 +123,12 @@ def answer_online_question(text):
 
 
 if __name__ == "__main__":
-    for q in ["What's the weather in Bengaluru?",
-              "Will it rain in Mumbai tomorrow?",
-              "What's the weather like?",
-              "Tell me the news.",
-              "When is my meeting with Rahul?"]:
-        print(f"\n{q}\n-> {answer_online_question(q)}")
+    tests = [
+        ("What's the weather?", None),              # no home city set -> should ask
+        ("What's the weather?", "Pune"),            # home city set -> uses it
+        ("What's the weather in Mumbai?", None),    # city spoken -> uses Mumbai
+        ("Tell me the news.", None),
+        ("When is my meeting with Rahul?", None),   # not online -> None
+    ]
+    for q, home in tests:
+        print(f"\n{q}  [home city: {home}]\n-> {answer_online_question(q, home)}")
