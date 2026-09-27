@@ -147,10 +147,7 @@ def main():
         found = memory.search(text)
         messages = list(history)
         now = time.strftime("%A, %d %B %Y, %I:%M %p")
-        messages.append({"role": "system", "content":
-            f"Current local date and time: {now}\n"
-            f"'Next <day>' means the first upcoming date with that name in this calendar:\n"
-            f"{upcoming_days()}"})
+        messages.append({"role": "system", "content": f"Current local date and time: {now}"})
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
             print(f"📚 Using memory:\n{facts}")
