@@ -49,7 +49,7 @@ class MemoryStore:
         self.db.commit()
         return row[1]
 
-    def search(self, query, k=3, min_score=0.4):
+    def search(self, query, k=3, min_score=0.5):
         rows = self.db.execute("SELECT text, vec FROM memories").fetchall()
         if not rows:
             return []
@@ -69,6 +69,12 @@ class MemoryStore:
             "SELECT value FROM settings WHERE key = ?", (key,)
         ).fetchone()
         return row[0] if row else None
+      
+    def forget_all(self):
+        count = self.db.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        self.db.execute("DELETE FROM memories")
+        self.db.commit()
+        return count
 
 
 if __name__ == "__main__":

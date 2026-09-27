@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import sounddevice as sd
 import openwakeword
+import math
 from openwakeword.model import Model as WakeModel
 from pywhispercpp.model import Model as SttModel
 from tts import speak
@@ -17,6 +18,7 @@ CHUNK = 1280            # 80 ms
 RECORD_SECONDS = 5
 WAKE_WORD = "hey_jarvis"   # ya "hey_mycroft"
 WAKE_THRESHOLD = 0.5
+CONFIDENCE_THRESHOLD = 0.85   # tune after testing
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
@@ -26,8 +28,8 @@ SYSTEM_PROMPT = (
     "If the user's saved memories answer the question, use them. "
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
-    "If you are not sure about something, say you don't know instead of guessing.",
-    "You cannot perform actions or change settings. ",
+    "If you are not sure about something, say you don't know instead of guessing. "
+    "You cannot perform actions or change settings. "
     "Never say you saved, set, or changed anything."
 )
 
@@ -68,15 +70,23 @@ def transcribe(stt, audio, memory):
 
 
 def think(messages):
+    """Returns (reply, confidence). Confidence comes from the model's own token probabilities."""
     response = requests.post(OLLAMA_URL, json={
         "model": LLM_MODEL,
         "messages": messages,
         "stream": False,
         "keep_alive": "30m",
-        "options": {"temperature": 0},
+        "logprobs": True,
+        "options": {"temperature": 0, "num_predict": 80},
     }, timeout=120)
+    if response.status_code != 200:
+        print("⚠️ Ollama says:", response.text)
     response.raise_for_status()
-    return response.json()["message"]["content"].strip()
+    data = response.json()
+    reply = data["message"]["content"].strip()
+    lps = data.get("logprobs") or []
+    confidence = math.exp(sum(t["logprob"] for t in lps) / len(lps)) if lps else 1.0
+    return reply, confidence
 
 
 def handle_command(text, memory, history):
@@ -106,6 +116,12 @@ def handle_command(text, memory, history):
         print(f"💾 Saved: {fact}")
         speak(f"Okay, I'll remember: {fact.split(' (saved on')[0]}")
         return True
+    if lower.startswith(("forget everything", "delete everything", "erase everything")):
+        count = memory.forget_all()
+        del history[1:]
+        print(f"🧹 Erased {count} memories")
+        speak(f"Done. I've erased all {count} memories.")
+        return True
 
     if lower.startswith("forget that") or lower == "forget it":
         removed = memory.forget_last()
@@ -117,7 +133,7 @@ def handle_command(text, memory, history):
             speak("There's nothing to forget.")
         return True
 
-    if ("remember" in lower or "saved" in lower) and lower.startswith(("what", "tell me", "list")):
+    if re.search(r"remember|saved|memor", lower) and lower.startswith(("what", "tell me", "list")):
         items = memory.all()
         if not items:
             speak("I don't have anything saved about you.")
@@ -174,7 +190,13 @@ def main():
         messages.append({"role": "user", "content": text})
 
         start = time.time()
-        reply = think(messages)
+        reply, confidence = think(messages)
+        print(f"🤔 Confidence: {confidence:.2f}")
+
+        # "I'm not sure" mode: low confidence on general knowledge = likely a guess
+        if not found and confidence < CONFIDENCE_THRESHOLD:
+            print(f"   (withheld guess: {reply})")
+            reply = "I'm not sure about that, so I'd rather not guess."
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
         history = history[:1] + history[-6:]   # keep only recent turns, stays fast
