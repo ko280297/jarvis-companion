@@ -11,12 +11,15 @@ from openwakeword.model import Model as WakeModel
 from pywhispercpp.model import Model as SttModel
 from tts import speak
 from memory import MemoryStore, _embed
-from tools import answer_time_question
+from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call
+from collections import deque
 
 SAMPLE_RATE = 16000
 CHUNK = 1280            # 80 ms
-RECORD_SECONDS = 5
+MAX_RECORD_SECONDS = 8      # longest question allowed
+SILENCE_TO_STOP = 1.0       # seconds of quiet that ends the question
+NO_SPEECH_TIMEOUT = 3.0     # give up if nothing is said
 WAKE_WORD = "hey_jarvis"   # ya "hey_mycroft"
 WAKE_THRESHOLD = 0.5
 CONFIDENCE_THRESHOLD = 0.85   # tune after testing
@@ -26,6 +29,7 @@ LLM_MODEL = "qwen2.5:1.5b"
 SYSTEM_PROMPT = (
     "You are a private voice assistant. All your thinking happens on this device. "
     "Answer in one or two short sentences. "
+    "If a memory contains [date: ...], use exactly that date and never calculate dates yourself. "
     "If the user's saved memories answer the question, use them. "
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
@@ -67,24 +71,57 @@ GATE_THRESHOLD = 0.45    # below this: clearly offline, skip the router
 STRONG_GATE = 0.70       # above this: trust the gate even if the router hesitates
 GATE_THRESHOLD = 0.45   # tune after testing
 
+def ding():
+    """Short soft beep so the user knows when to start speaking."""
+    rate = 22050
+    t = np.linspace(0, 0.15, int(0.15 * rate), False)
+    tone = 0.3 * np.sin(2 * np.pi * 880 * t) * np.linspace(1, 0, t.size)
+    sd.play(tone.astype(np.float32), rate)
+
+
+def rms(frame):
+    """Loudness of one audio chunk."""
+    return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+
+
 def wait_for_wake_word_and_record(wake):
-    """Listen for the wake word, then record the question from the same mic stream."""
+    """Wait for the wake word, then record until the user stops talking."""
     wake.reset()
+    noise = deque(maxlen=50)    # background loudness over the last ~4 seconds
+    chunk_sec = CHUNK / SAMPLE_RATE
+
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                         dtype="int16", blocksize=CHUNK) as stream:
         print("\n💤 Waiting for wake word...")
         while True:
             frame, _ = stream.read(CHUNK)
-            scores = wake.predict(frame.flatten())
-            if max(scores.values()) > WAKE_THRESHOLD:
+            frame = frame.flatten()
+            noise.append(rms(frame))
+            if max(wake.predict(frame).values()) > WAKE_THRESHOLD:
                 break
 
-        print("👂 Listening...")
-        frames = []
-        for _ in range(int(RECORD_SECONDS * SAMPLE_RATE / CHUNK)):
-            frame, _ = stream.read(CHUNK)
-            frames.append(frame.flatten())
+        ding()
+        for _ in range(3):              # skip the ding itself (~240 ms)
+            stream.read(CHUNK)
 
+        threshold = max(3 * float(np.median(noise)), 300)   # learned from the room
+        print("👂 Listening...")
+
+        frames, heard_speech, quiet = [], False, 0.0
+        for _ in range(int(MAX_RECORD_SECONDS / chunk_sec)):
+            frame, _ = stream.read(CHUNK)
+            frame = frame.flatten()
+            frames.append(frame)
+            if rms(frame) > threshold:
+                heard_speech, quiet = True, 0.0
+            else:
+                quiet += chunk_sec
+            if heard_speech and quiet >= SILENCE_TO_STOP:
+                break
+            if not heard_speech and len(frames) * chunk_sec >= NO_SPEECH_TIMEOUT:
+                break
+
+    print(f"   (recorded {len(frames) * chunk_sec:.1f}s)")
     return np.concatenate(frames).astype(np.float32) / 32768.0
 
 
@@ -92,7 +129,7 @@ def transcribe(stt, audio, memory):
     # Hint whisper with names the user has saved themselves (nothing hardcoded)
     words = set()
     for t in memory.all():
-        t = t.split(" (saved on")[0]          # dates are not names, keep them out of the hint
+        t = re.sub(r"\[date:.*?\]", "", t.split(" (saved on")[0])   # dates are not names         # dates are not names, keep them out of the hint
         words.update(re.findall(r"\b[A-Z][a-z]+", t))
     city = memory.get_setting("home_city")
     if city:
@@ -178,10 +215,11 @@ def handle_command(text, memory, history):
         if not fact:
             speak("What should I remember?")
             return True
-        fact = f"{fact} (saved on {date.today():%A, %d %B %Y})"
+        fact = resolve_dates(fact)                                   # 1. real date first
+        fact = f"{fact} (saved on {date.today():%A, %d %B %Y})"     # 2. then when it was saved
         memory.add(fact)
         print(f"💾 Saved: {fact}")
-        speak(f"Okay, I'll remember: {fact.split(' (saved on')[0]}")
+        speak("Okay, I'll remember that.")
         return True
     if lower.startswith(("forget everything", "delete everything", "erase everything")):
         count = memory.forget_all()
@@ -265,9 +303,7 @@ def main():
                     speak(tool_reply)
                     continue
         messages = list(history)
-        now = time.strftime("%A, %d %B %Y, %I:%M %p")
-        messages.append({"role": "system", "content":
-            f"Current local date and time (reference only, this is NOT the user's plans): {now}"})
+        
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
             print(f"📚 Using memory:\n{facts}")

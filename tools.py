@@ -14,7 +14,9 @@ DATE_QUESTION = re.compile(
     r"|\bwhen\s+is\s+(the\s+)?next\b"
 )
 TIME_QUESTION = re.compile(r"\bwhat\s+time\b|\bwhat('s|\s+is)\s+the\s+time\b")
-
+# "What's the date?" / "What day is it today?" (nothing else in the question)
+PLAIN_DATE_Q = re.compile(
+    r"^(what|which)('s|\s+is)?\s+(the\s+)?(date|day)(\s+is\s+it)?(\s+today)?[?.!\s]*$")
 # "2nd October 2026", "12th of October"
 DAY_MONTH = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({MONTH_RE})(?:,?\s+(\d{{4}}))?")
 # "October 2nd, 2026", "October 12"
@@ -72,11 +74,30 @@ def answer_time_question(text):
         return f"Tomorrow is {_fmt(today + timedelta(days=1))}."
     if "yesterday" in t:
         return f"Yesterday was {_fmt(today - timedelta(days=1))}."
-    if "today" in t or "date" in t:
+    if "today" in t or PLAIN_DATE_Q.match(t.strip()):
         return f"Today is {_fmt(today)}."
 
     return None
 
+def resolve_dates(text):
+    """Turn relative dates into real ones at save time: 'on Friday' -> '... [date: Friday, 2 October 2026]'."""
+    t = text.lower()
+    today = date.today()
+    d = _find_explicit_date(t)
+    if d is None:
+        if "day after tomorrow" in t:
+            d = today + timedelta(days=2)
+        elif "tomorrow" in t:
+            d = today + timedelta(days=1)
+        elif "today" in t:
+            d = today
+        else:
+            m = re.search(r"\b(" + "|".join(WEEKDAYS) + r")\b", t)
+            if m:
+                target = WEEKDAYS.index(m.group(1))
+                ahead = (target - today.weekday()) % 7 or 7
+                d = today + timedelta(days=ahead)
+    return f"{text} [date: {_fmt(d)}]" if d else text
 
 if __name__ == "__main__":
     for q in ["What time is it?",
@@ -86,5 +107,7 @@ if __name__ == "__main__":
               "What day is October 12th?",
               "What's the date today?",
               "What day is it tomorrow?",
-              "When is my meeting with Rahul?"]:
+              "When is my meeting with Rahul?",
+              "What is the date?",
+              "What is the date of my meeting with Rahul?",]:
         print(q, "->", answer_time_question(q))
