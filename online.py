@@ -121,6 +121,42 @@ def answer_online_question(text, home_city=None):
                 "Everything else still works offline.")
     return None
 
+CITY_OK = re.compile(r"^[A-Za-z][A-Za-z .'-]{1,39}$")
+
+
+def _log_blocked(tool, attempted):
+    """Record requests the LLM tried but the code refused. Nothing leaves the device."""
+    entry = {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+             "tool": tool, "sent": None, "attempted": attempted, "status": "blocked"}
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+    print(f"🛡️ BLOCKED → {tool} | attempted: {attempted!r} | nothing sent")
+
+
+def run_tool_call(name, args, home_city=None):
+    """LLM decides, code enforces: only whitelisted tools, only validated arguments."""
+    try:
+        if name == "get_weather":
+            city = (args.get("city") or home_city or "").strip()
+            day = args.get("day") if args.get("day") in ("today", "tomorrow") else "today"
+            if not city:
+                return "Which city should I check? You can say: my city is Pune."
+            if not CITY_OK.match(city) or len(city.split()) > 3:
+                _log_blocked(name, city)
+                return "I blocked that request because it didn't look like a city name."
+            return get_weather(city.title(), day)
+
+        if name == "get_news":
+            return get_news()
+
+    except requests.RequestException:
+        return ("I can't reach the internet right now, so I can't check that. "
+                "Everything else still works offline.")
+
+    _log_blocked(name, str(args))    # unknown tool: refuse
+    return None
+
+
 
 if __name__ == "__main__":
     tests = [
