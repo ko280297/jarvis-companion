@@ -17,13 +17,14 @@ from tts import speak
 from memory import MemoryStore, _embed
 from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call
-
+from difflib import SequenceMatcher
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
 MAX_RECORD_SECONDS = 8      # longest question allowed
 SILENCE_TO_STOP = 1.0       # seconds of quiet that ends the question
-NO_SPEECH_TIMEOUT = 3.0     # give up if nothing is said
+NO_SPEECH_TIMEOUT = 3.0     # after the wake word: give up if nothing is said
+FOLLOW_UP_SECONDS = 5.0     # conversation mode: how long to wait for a reply without the wake word
 WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
 
@@ -34,11 +35,27 @@ STRONG_GATE = 0.70            # above this: trust the gate even if the router he
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
+
+# ---------- Personality ----------
+ASSISTANT_NAME = "Jarvis"
+INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on this device, "
+         "so everything you tell me stays with you.")
+CAPABILITIES = ("I can remember things for you, tell you the date and time, "
+                "and check the weather or news. "
+                "And if I'm not sure about something, I'll tell you instead of guessing.")
+END_CONVERSATION = re.compile(r"\b(bye|goodbye|that's all|thats all|that is all|nothing else|stop listening)\b")
+
 SYSTEM_PROMPT = (
-    "You are a private voice assistant. All your thinking happens on this device. "
-    "Answer in one or two short sentences. "
+    f"Your name is {ASSISTANT_NAME}. You are a warm, friendly companion, like a helpful friend. "
+    "Speak casually and kindly, and keep answers to one or two short sentences. "
+    "Your replies are spoken aloud, so never use emojis, lists, or special symbols. "
+    "You can add a light friendly touch, but never make up facts: being honest matters more than being fun. "
+    "If someone asks how you are, answer warmly like a friend would, and ask about them too. "
+    "Never describe yourself as 'just a computer program'. "
+    "All your thinking happens on this device. "
     "If a memory contains [date: ...], use exactly that date and never calculate dates yourself. "
-    "If the user's saved memories answer the question, use them. "
+    "If the user's saved memories answer the question, answer only what was asked, "
+    "using just the relevant part of the memory. Do not repeat the whole memory. "
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
     "If you are not sure about something, say you don't know instead of guessing. "
@@ -79,19 +96,31 @@ ONLINE_EXAMPLES = [
 
 
 # ---------- Output ----------
+_greeting = ""    # e.g. "Nice to meet you, Krati!" to put in front of the next reply
+
+
 def say(text, route, confidence=None):
-    """Speak a reply and show it on the dashboard."""
+    """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
+    global _greeting
+    text = (_greeting + " " + text).strip()
+    _greeting = ""
     dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence)
     speak(text)
 
 
 # ---------- Listening ----------
+_threshold = 300.0    # speech loudness threshold, learned from the room while waiting for the wake word
+
+
 def ding():
-    """Short soft beep so the user knows when to start speaking."""
-    rate = 22050
-    t = np.linspace(0, 0.15, int(0.15 * rate), False)
-    tone = 0.3 * np.sin(2 * np.pi * 880 * t) * np.linspace(1, 0, t.size)
+    """Short two-tone chime so the user knows when to start speaking."""
+    rate = 44100
+    t = np.linspace(0, 0.12, int(0.12 * rate), False)
+    fade = np.linspace(1, 0, t.size)
+    tone = np.concatenate([np.sin(2 * np.pi * 660 * t), np.sin(2 * np.pi * 990 * t)])
+    tone = 0.6 * tone * np.concatenate([fade, fade])
     sd.play(tone.astype(np.float32), rate)
+    sd.wait()
 
 
 def rms(frame):
@@ -99,45 +128,53 @@ def rms(frame):
     return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
 
 
-def wait_for_wake_word_and_record(wake):
-    """Wait for the wake word, then record until the user stops talking."""
-    wake.reset()
-    noise = deque(maxlen=50)    # background loudness over the last ~4 seconds
+def listen(wake, follow_up=False):
+    """Wake-word mode: wait for 'Hey Jarvis', then record.
+    Follow-up mode: skip the wake word and just listen briefly for a reply.
+    Returns the audio, or None if nobody spoke."""
+    global _threshold
     chunk_sec = CHUNK / SAMPLE_RATE
 
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
                         dtype="int16", blocksize=CHUNK) as stream:
-        print("\n💤 Waiting for wake word...")
-        dashboard.update(status="waiting")
-        while True:
-            frame, _ = stream.read(CHUNK)
-            frame = frame.flatten()
-            noise.append(rms(frame))
-            if max(wake.predict(frame).values()) > WAKE_THRESHOLD:
-                break
+        if follow_up:
+            print("\n💬 Still listening, no wake word needed...")
+            no_speech_timeout = FOLLOW_UP_SECONDS
+        else:
+            wake.reset()
+            noise = deque(maxlen=50)    # background loudness over the last ~4 seconds
+            print("\n💤 Waiting for wake word...")
+            dashboard.update(status="waiting")
+            while True:
+                frame, _ = stream.read(CHUNK)
+                frame = frame.flatten()
+                noise.append(rms(frame))
+                if max(wake.predict(frame).values()) > WAKE_THRESHOLD:
+                    break
+            ding()
+            for _ in range(3):              # skip the ding itself (~240 ms)
+                stream.read(CHUNK)
+            _threshold = max(3 * float(np.median(noise)), 300)
+            print("👂 Listening...")
+            no_speech_timeout = NO_SPEECH_TIMEOUT
 
-        ding()
-        for _ in range(3):              # skip the ding itself (~240 ms)
-            stream.read(CHUNK)
-
-        threshold = max(3 * float(np.median(noise)), 300)   # learned from the room
-        print("👂 Listening...")
         dashboard.update(status="listening")
-
         frames, heard_speech, quiet = [], False, 0.0
         for _ in range(int(MAX_RECORD_SECONDS / chunk_sec)):
             frame, _ = stream.read(CHUNK)
             frame = frame.flatten()
             frames.append(frame)
-            if rms(frame) > threshold:
+            if rms(frame) > _threshold:
                 heard_speech, quiet = True, 0.0
             else:
                 quiet += chunk_sec
             if heard_speech and quiet >= SILENCE_TO_STOP:
                 break
-            if not heard_speech and len(frames) * chunk_sec >= NO_SPEECH_TIMEOUT:
+            if not heard_speech and len(frames) * chunk_sec >= no_speech_timeout:
                 break
 
+    if not heard_speech:
+        return None
     print(f"   (recorded {len(frames) * chunk_sec:.1f}s)")
     return np.concatenate(frames).astype(np.float32) / 32768.0
 
@@ -148,9 +185,10 @@ def transcribe(stt, audio, memory):
     for t in memory.all():
         t = re.sub(r"\[date:.*?\]", "", t.split(" (saved on")[0])   # dates are not names
         words.update(re.findall(r"\b[A-Z][a-z]+", t))
-    city = memory.get_setting("home_city")
-    if city:
-        words.add(city)
+    for key in ("home_city", "user_name"):
+        value = memory.get_setting(key)
+        if value:
+            words.add(value)
     hint = ", ".join(sorted(words))
     segments = stt.transcribe(audio, initial_prompt=hint)
     return " ".join(s.text.strip() for s in segments).strip()
@@ -190,6 +228,15 @@ def route(text):
     return None
 
 
+def context_message(memory):
+    """Small, safe context: the user's name and the part of the day (not the exact time)."""
+    hour = time.localtime().tm_hour
+    part = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
+    name = memory.get_setting("user_name")
+    who = f"The user's name is {name}. Use it now and then, not in every reply. " if name else ""
+    return {"role": "system", "content": f"{who}It is currently {part}."}
+
+
 def think(messages):
     """Returns (reply, confidence). Confidence comes from the model's own token probabilities."""
     response = requests.post(OLLAMA_URL, json={
@@ -211,9 +258,47 @@ def think(messages):
 
 
 # ---------- Commands ----------
+def strip_address(text):
+    """'Ok Jarvis, what's the weather?' -> 'what's the weather?'
+    Also catches mishearings like 'Jardis', by comparing how similar the word is to the name."""
+    words = text.split()
+    i = 0
+    if words and words[0].lower().strip(",.!?") in ("hey", "ok", "okay", "hi", "hello"):
+        i = 1
+    if i < len(words):
+        word = words[i].lower().strip(",.!?")
+        if SequenceMatcher(None, word, ASSISTANT_NAME.lower()).ratio() >= 0.7:
+            return " ".join(words[i + 1:]).strip(" ,") or text
+    return text
+
+
+def take_introduction(text, memory):
+    """'I am Krati, who are you?' -> saves the name and returns the rest: 'who are you?'.
+    Returns (rest_of_text, name_or_None)."""
+    t = re.sub(r"^(?:hi|hello|hey)[,!.]?\s+", "", text.strip(), flags=re.I)
+    m = re.match(r"(?:my name is|call me)\s+([A-Za-z]+)\b(?!')[,.!]?\s*(.*)$", t, re.I)
+    if not m:
+        # "I am ..." only counts when the next word is capitalised: "I am Krati" yes, "I am tired" no
+        m = re.match(r"(?:I am|I'm|This is)\s+([A-Z][a-z]+)\b(?!')[,.!]?\s*(.*)$", t)
+    if not m:
+        return text, None
+    name = m.group(1).title()
+    memory.set_setting("user_name", name)
+    print(f"🙂 User name set: {name}")
+    return m.group(2).strip(), name
+
+
 def handle_command(text, memory, history):
-    """Handle city / remember / forget / list commands. Returns True if handled."""
+    """Handle identity / city / remember / forget / list commands. Returns True if handled."""
     lower = text.lower().strip(" .!?,")
+
+    if re.match(r"(who are you|what(?:'s| is) your name|introduce yourself)", lower):
+        say(INTRO, f"🙂 about {ASSISTANT_NAME}")
+        return True
+
+    if re.match(r"(what can you do|what are your features|how can you help)", lower):
+        say(CAPABILITIES, f"🙂 about {ASSISTANT_NAME}")
+        return True
 
     m = re.match(
         r"(?:my (?:current |home )?city is"
@@ -257,13 +342,15 @@ def handle_command(text, memory, history):
             say("There's nothing to forget.", "🗑️ memory")
         return True
 
-    if re.search(r"remember|saved|memor", lower) and lower.startswith(("what", "tell me", "list")):
+    if re.search(r"remember|saved|memor", lower) and lower.startswith(
+            ("what", "tell me", "list", "do you", "do we", "is there", "anything")):
         items = memory.all()
         if not items:
             say("I don't have anything saved about you.", "📋 memory list")
         else:
             print("📋 Memories:\n" + "\n".join(f"- {t}" for t in items))
-            say(f"I have {len(items)} things saved. " + ". ".join(items), "📋 memory list")
+            clean = [re.sub(r"\s*\[date: (.*?)\]", r", on \1", t.split(" (saved on")[0]) for t in items]
+            say(f"I have {len(items)} things saved. " + ". ".join(clean), "📋 memory list")
         return True
 
     return False
@@ -271,6 +358,7 @@ def handle_command(text, memory, history):
 
 # ---------- Main loop ----------
 def main():
+    global _greeting
     dashboard.start()
     print("Loading models...")
     openwakeword.utils.download_models()
@@ -279,18 +367,41 @@ def main():
     memory = MemoryStore()
     example_vecs = np.stack([_embed(e) for e, _ in ONLINE_EXAMPLES])
     history = [{"role": "system", "content": SYSTEM_PROMPT}]
+    follow_up = False
     print("Ready!")
 
     while True:
         dashboard.update(memories=len(memory.all()))
-        audio = wait_for_wake_word_and_record(wake)
+        audio = listen(wake, follow_up)
+        if audio is None:
+            if follow_up:
+                print("   (quiet, so the conversation ended)")
+            follow_up = False
+            continue
+
         dashboard.update(status="thinking")
         text = transcribe(stt, audio, memory)
         if not text or text.startswith("[") or text.startswith("("):
             print("Didn't catch anything.")
+            follow_up = False
             continue
         print(f"You: {text}")
+        text = strip_address(text)
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
+        follow_up = True        # after any reply, keep listening briefly
+
+        if END_CONVERSATION.search(text.lower()):
+            say("Okay, talk soon!", "👋 conversation ended")
+            follow_up = False
+            continue
+
+        # "I am Krati, who are you?" -> save the name, then answer the rest
+        text, new_name = take_introduction(text, memory)
+        if new_name:
+            _greeting = f"Nice to meet you, {new_name}!"
+            if not text:
+                say("", "⚙️ name saved on device")
+                continue
 
         if handle_command(text, memory, history):
             continue
@@ -333,6 +444,7 @@ def main():
             print(f"📚 Using memory:\n{facts}")
             messages.append({"role": "system",
                              "content": f"The user's saved memories:\n{facts}"})
+        messages.append(context_message(memory))
         messages.append({"role": "user", "content": text})
 
         start = time.time()
@@ -344,10 +456,20 @@ def main():
         declined = re.search(r"don't (know|have)|not sure|no access", reply.lower())
         is_question = text.strip().endswith("?") or re.match(
             r"(what|who|when|where|why|how|which|is|are|do|does|did|can|tell me)\b", text.lower())
-        if not found and not declined and is_question and confidence < CONFIDENCE_THRESHOLD:
+        about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
+        if not found and not declined and is_question and not about_assistant and confidence < CONFIDENCE_THRESHOLD:
             print(f"   (withheld guess: {reply})")
-            reply = "I'm not sure about that, so I'd rather not guess."
+            reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
             route_name = "🤔 not sure (guess withheld)"
+
+        # Block false promises: the LLM can't set alarms, send messages, or make calls
+        promise = re.search(
+            r"\b(i'll|i will|i've|i have)\s+(remind|set|call|text|send|book|order|schedule|add|save)",
+            reply.lower())
+        if promise:
+            print(f"   (blocked false promise: {reply})")
+            reply = "I can't do that yet, sorry. Ask me what I can do, and I'll tell you."
+            route_name = "🛡️ false promise blocked"
 
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})

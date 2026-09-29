@@ -4,8 +4,14 @@ from piper import PiperVoice
 
 voice = PiperVoice.load("en_US-lessac-medium.onnx")
 
+# How the voice should pronounce tricky words (display text stays the same).
+# Example: "Hardoi": "Hardoee"
+PRONOUNCE = {}
+
 
 def speak(text):
+    for word, sound in PRONOUNCE.items():
+        text = text.replace(word, sound)
     chunks = list(voice.synthesize(text))
     if not chunks:
         return
@@ -15,4 +21,4 @@ def speak(text):
 
 
 if __name__ == "__main__":
-    speak("Hello! I am your private assistant, running fully offline.")
+    speak("Hi! I'm Nia, your private companion. Everything I think stays on this device.")
