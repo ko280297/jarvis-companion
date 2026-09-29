@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Private Companion · Dashboard</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --card: #171a21;
+        --line: #262b36;
+        --text: #e7e9ee;
+        --muted: #8b93a7;
+        --green: #3ddc84;
+        --amber: #ffb020;
+        --blue: #4da3ff;
+        --red: #ff5d5d;
+        --grey: #5b6275;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, "Segoe UI", sans-serif;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px;
+        margin: 18px 0 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 8px;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--grey);
+        flex: none;
+      }
+      .pulse {
+        animation: pulse 1.2s infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      .big {
+        font-size: 30px;
+        font-weight: 700;
+      }
+      .text {
+        font-size: 16px;
+        line-height: 1.5;
+        min-height: 24px;
+      }
+      .pill {
+        display: inline-block;
+        margin-top: 12px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: var(--line);
+        font-size: 13px;
+      }
+      .bar {
+        height: 8px;
+        background: var(--line);
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 6px;
+      }
+      .bar > div {
+        height: 100%;
+        width: 0;
+        transition: width 0.3s;
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .ok {
+        color: var(--green);
+      }
+      .failed {
+        color: var(--amber);
+      }
+      .blocked {
+        color: var(--red);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔒 Private Companion</h1>
+    <div class="sub">
+      All reasoning happens on this device. Only the calls listed below ever
+      touched the internet.
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">Device</div>
+        <div class="status">
+          <span id="dot" class="dot"></span><span id="status">…</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Saved memories (on device)</div>
+        <div class="big" id="memories">–</div>
+      </div>
+      <div class="card">
+        <div class="label">Internet calls</div>
+        <div class="big" id="calls">–</div>
+        <div class="sub" id="callsub"></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">Last heard</div>
+        <div class="text" id="heard">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Answer</div>
+        <div class="text" id="reply">—</div>
+        <span class="pill" id="route">—</span>
+        <div id="confwrap" style="display: none; margin-top: 14px">
+          <div class="label">Model confidence: <span id="conf"></span></div>
+          <div class="bar"><div id="confbar"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Internet log (newest first)</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Tool</th>
+              <th>What left the device</th>
+              <th>Where</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      const COLORS = {
+        waiting: "var(--grey)",
+        listening: "var(--green)",
+        thinking: "var(--amber)",
+        speaking: "var(--blue)",
+        starting: "var(--grey)",
+      };
+      const LABELS = {
+        waiting: "Waiting for wake word",
+        listening: "Listening",
+        thinking: "Thinking (on this device)",
+        speaking: "Speaking",
+        starting: "Starting…",
+      };
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        );
+      const $ = (id) => document.getElementById(id);
+
+      async function tick() {
+        try {
+          const s = await (await fetch("/state")).json();
+          $("dot").style.background = COLORS[s.status] || "var(--grey)";
+          $("dot").classList.toggle(
+            "pulse",
+            s.status === "listening" || s.status === "thinking",
+          );
+          $("status").textContent = LABELS[s.status] || s.status;
+          $("memories").textContent = s.memories;
+          $("heard").textContent = s.last_heard || "—";
+          $("reply").textContent = s.last_reply || "—";
+          $("route").textContent = s.route || "—";
+
+          if (s.confidence != null) {
+            $("confwrap").style.display = "block";
+            $("conf").textContent = s.confidence.toFixed(2);
+            $("confbar").style.width = s.confidence * 100 + "%";
+            $("confbar").style.background =
+              s.confidence >= 0.85 ? "var(--green)" : "var(--amber)";
+          } else {
+            $("confwrap").style.display = "none";
+          }
+
+          const t = s.totals || {};
+          const total = (t.ok || 0) + (t.failed || 0) + (t.blocked || 0);
+          $("calls").textContent = total;
+          $("callsub").textContent =
+            `${t.ok || 0} ok · ${t.failed || 0} failed · ${t.blocked || 0} blocked`;
+
+          $("log").innerHTML =
+            s.log
+              .map(
+                (e) => `<tr>
+          <td>${esc((e.time || "").slice(11))}</td>
+          <td>${esc(e.tool)}</td>
+          <td>${e.sent != null ? esc(e.sent) : "nothing sent (tried: " + esc(e.attempted) + ")"}</td>
+          <td>${esc(e.host || "—")}</td>
+          <td class="${esc(e.status || "ok")}">${esc(e.status || "ok")}</td>
+        </tr>`,
+              )
+              .join("") ||
+            `<tr><td colspan="5" class="sub">No internet calls yet.</td></tr>`;
+        } catch (err) {
+          $("status").textContent = "Device offline";
+          $("dot").style.background = "var(--red)";
+        }
+      }
+      setInterval(tick, 700);
+      tick();
+    </script>
+  </body>
+</html>
