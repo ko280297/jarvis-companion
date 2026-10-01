@@ -4,6 +4,7 @@ import re
 import time
 from collections import deque
 from datetime import date
+from difflib import SequenceMatcher
 
 import numpy as np
 import requests
@@ -17,7 +18,8 @@ from tts import speak
 from memory import MemoryStore, _embed
 from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call
-from difflib import SequenceMatcher
+from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAMES, STARTER_LISTS
+
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
@@ -30,8 +32,8 @@ WAKE_THRESHOLD = 0.5
 
 # ---------- Reasoning ----------
 CONFIDENCE_THRESHOLD = 0.85   # from testing: facts 0.9+, guesses below 0.75
-GATE_THRESHOLD = 0.45         # below this: clearly offline, skip the router
-STRONG_GATE = 0.70            # above this: trust the gate even if the router hesitates
+GATE_THRESHOLD = 0.45         # below this: no tool needed, skip the router
+STRONG_GATE = 0.70            # above this: trust the gate even if the router hesitates (online only)
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
@@ -40,8 +42,8 @@ LLM_MODEL = "qwen2.5:1.5b"
 ASSISTANT_NAME = "Jarvis"
 INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on this device, "
          "so everything you tell me stays with you.")
-CAPABILITIES = ("I can remember things for you, tell you the date and time, "
-                "and check the weather or news. "
+CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
+                "tell you the date and time, and check the weather or news. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(r"\b(bye|goodbye|that's all|thats all|that is all|nothing else|stop listening)\b")
 
@@ -59,7 +61,8 @@ SYSTEM_PROMPT = (
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
     "If you are not sure about something, say you don't know instead of guessing. "
-    "You cannot change settings. Never claim you saved, set, or changed anything."
+    "You cannot change settings. Never claim you saved, set, or changed anything. "
+    "You cannot see or change the user's lists. Never say you added, removed, or saved anything."
 )
 
 TOOLS = [
@@ -82,8 +85,8 @@ TOOLS = [
     }},
 ]
 
-# Examples that define what "needs the internet" means. The gate compares meaning, not keywords.
-ONLINE_EXAMPLES = [
+# Examples that define each kind of request. The gate compares meaning, not keywords.
+INTENT_EXAMPLES = [
     ("What's the weather like today?", "get_weather"),
     ("Will it rain tomorrow?", "get_weather"),
     ("Is it hot or cold outside?", "get_weather"),
@@ -92,6 +95,14 @@ ONLINE_EXAMPLES = [
     ("What's the latest news?", "get_news"),
     ("What is happening in the world today?", "get_news"),
     ("Tell me today's headlines.", "get_news"),
+    ("Add milk to my grocery list.", "lists"),
+    ("Please put eggs on my shopping list.", "lists"),
+    ("Add this idea to my ideas.", "lists"),
+    ("Add a meeting on Friday to my schedule.", "lists"),
+    ("What's on my grocery list?", "lists"),
+    ("What lists do I have?", "lists"),
+    ("Remove bread from my list.", "lists"),
+    ("Capture this thought for later.", "lists"),
 ]
 
 
@@ -180,7 +191,7 @@ def listen(wake, follow_up=False):
 
 
 def transcribe(stt, audio, memory):
-    # Hint whisper with names the user has saved themselves (nothing hardcoded)
+    """Speech to text, hinted with words the user has used themselves (nothing hardcoded)."""
     words = set()
     for t in memory.all():
         t = re.sub(r"\[date:.*?\]", "", t.split(" (saved on")[0])   # dates are not names
@@ -189,6 +200,7 @@ def transcribe(stt, audio, memory):
         value = memory.get_setting(key)
         if value:
             words.add(value)
+    words.update(set(memory.list_names()) | set(STARTER_LISTS))   # the user's own list names
     hint = ", ".join(sorted(words))
     segments = stt.transcribe(audio, initial_prompt=hint)
     return " ".join(s.text.strip() for s in segments).strip()
@@ -196,20 +208,20 @@ def transcribe(stt, audio, memory):
 
 # ---------- Thinking ----------
 def gate(text, example_vecs):
-    """Returns (similarity to 'needs the internet' examples, which tool it looks like)."""
+    """Returns (similarity to the closest example, which kind of request it looks like)."""
     sims = example_vecs @ _embed(text)
     i = int(np.argmax(sims))
-    return float(sims[i]), ONLINE_EXAMPLES[i][1]
+    return float(sims[i]), INTENT_EXAMPLES[i][1]
 
 
-def route(text):
+def route(text, tools):
     """Router: sees ONLY the question (no memories), so it can never leak personal data into a tool.
     Streams the reply and stops as soon as the model starts writing text (= no tool needed)."""
     with requests.post(OLLAMA_URL, json={
         "model": LLM_MODEL,
         "stream": True,
         "keep_alive": "30m",
-        "tools": TOOLS,
+        "tools": tools,
         "messages": [{"role": "user", "content": text}],
         "options": {"temperature": 0, "num_predict": 40},
     }, stream=True, timeout=60) as response:
@@ -259,17 +271,18 @@ def think(messages):
 
 # ---------- Commands ----------
 def strip_address(text):
-    """'Ok Jarvis, what's the weather?' -> 'what's the weather?'
+    """'Ok Jarvis, what's the weather?' / 'What's on my list, Jarvis?' -> just the request.
     Also catches mishearings like 'Jardis', by comparing how similar the word is to the name."""
+    def is_name(word):
+        return SequenceMatcher(None, word.lower().strip(",.!?"), ASSISTANT_NAME.lower()).ratio() >= 0.7
+
     words = text.split()
-    i = 0
-    if words and words[0].lower().strip(",.!?") in ("hey", "ok", "okay", "hi", "hello"):
-        i = 1
-    if i < len(words):
-        word = words[i].lower().strip(",.!?")
-        if SequenceMatcher(None, word, ASSISTANT_NAME.lower()).ratio() >= 0.7:
-            return " ".join(words[i + 1:]).strip(" ,") or text
-    return text
+    if len(words) > 1 and is_name(words[-1]):                    # name at the end
+        words = words[:-1]
+    i = 1 if words and words[0].lower().strip(",.!?") in ("hey", "ok", "okay", "hi", "hello") else 0
+    if len(words) > i + 1 and is_name(words[i]):                 # name at the start
+        words = words[i + 1:]
+    return " ".join(words).strip(" ,") or text
 
 
 def take_introduction(text, memory):
@@ -289,8 +302,14 @@ def take_introduction(text, memory):
 
 
 def handle_command(text, memory, history):
-    """Handle identity / city / remember / forget / list commands. Returns True if handled."""
+    """Handle list / identity / city / remember / forget commands. Returns True if handled."""
     lower = text.lower().strip(" .!?,")
+
+    list_reply = handle_list_command(text, memory)
+    if list_reply:
+        print(f"📝 {list_reply}")
+        say(list_reply, "📝 lists (on device)")
+        return True
 
     if re.match(r"(who are you|what(?:'s| is) your name|introduce yourself)", lower):
         say(INTRO, f"🙂 about {ASSISTANT_NAME}")
@@ -365,7 +384,7 @@ def main():
     wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
     stt = SttModel("base.en")
     memory = MemoryStore()
-    example_vecs = np.stack([_embed(e) for e, _ in ONLINE_EXAMPLES])
+    example_vecs = np.stack([_embed(e) for e, _ in INTENT_EXAMPLES])
     history = [{"role": "system", "content": SYSTEM_PROMPT}]
     follow_up = False
     print("Ready!")
@@ -403,41 +422,53 @@ def main():
                 say("", "⚙️ name saved on device")
                 continue
 
+        # 1. Exact commands (fast)
         if handle_command(text, memory, history):
             continue
 
+        # 2. Date and time (Python, offline)
         tool_answer = answer_time_question(text)
         if tool_answer:
             print(f"🕐 {tool_answer}")
             say(tool_answer, "🕐 device clock (offline)")
             continue
 
+        # 3. Obvious weather / news (rules)
         online_answer = answer_online_question(text, memory.get_setting("home_city"))
         if online_answer:
             print(f"AI:  {online_answer}")
             say(online_answer, "🌐 internet (rule)")
             continue
 
+        # 4. Gate -> LLM router -> validated tool (lists or internet)
         found = memory.search(text)
-        score, likely_tool = gate(text, example_vecs)
-        print(f"🚦 Gate: {score:.2f} ({likely_tool})")
-        if not found and score >= GATE_THRESHOLD:
+        score, category = gate(text, example_vecs)
+        print(f"🚦 Gate: {score:.2f} ({category})")
+        wants_lists = category == "lists" and score >= GATE_THRESHOLD
+        wants_online = category != "lists" and score >= GATE_THRESHOLD and not found
+        if wants_lists or wants_online:
             t0 = time.time()
-            call = route(text)
-            if call is None and score >= STRONG_GATE:
-                call = {"name": likely_tool, "arguments": {}}
-                print(f"🚦 Router hesitated, gate is confident → {likely_tool}")
+            call = route(text, LIST_TOOLS if wants_lists else TOOLS)
+            if call is None and wants_online and score >= STRONG_GATE:
+                call = {"name": category, "arguments": {}}
+                print(f"🚦 Router hesitated, gate is confident → {category}")
             print(f"🧭 Router: {call['name'] + ' ' + str(call.get('arguments')) if call else 'no tool'}  ({time.time() - t0:.1f}s)")
             if call:
                 args = call.get("arguments") or {}
                 if isinstance(args, str):
                     args = json.loads(args)
-                tool_reply = run_tool_call(call["name"], args, memory.get_setting("home_city"))
+                if call["name"] in LIST_TOOL_NAMES:
+                    tool_reply = run_list_tool(call["name"], args, memory)
+                    tool_route = "📝 lists (LLM router)"
+                else:
+                    tool_reply = run_tool_call(call["name"], args, memory.get_setting("home_city"))
+                    tool_route = "🌐 internet (LLM router)"
                 if tool_reply:
                     print(f"AI:  {tool_reply}")
-                    say(tool_reply, "🌐 internet (LLM router)")
+                    say(tool_reply, tool_route)
                     continue
 
+        # 5. Local LLM answer (with memories if relevant)
         messages = list(history)
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
@@ -462,9 +493,11 @@ def main():
             reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
             route_name = "🤔 not sure (guess withheld)"
 
-        # Block false promises: the LLM can't set alarms, send messages, or make calls
+        # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(
-            r"\b(i'll|i will|i've|i have)\s+(remind|set|call|text|send|book|order|schedule|add|save)",
+            r"\b(i'll|i will|i've|i have|let me)\s+"
+            r"(remind|set|call|text|send|book|order|schedule|add|save|remove|note|check)"
+            r"|\b(added|removed|saved|scheduled|noted)\b",
             reply.lower())
         if promise:
             print(f"   (blocked false promise: {reply})")
