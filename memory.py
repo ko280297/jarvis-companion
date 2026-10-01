@@ -15,6 +15,14 @@ def _embed(text):
     v = np.array(r.json()["embeddings"][0], dtype=np.float32)
     return v / np.linalg.norm(v)
 
+def embed_many(texts):
+    """Embed many texts in ONE call (much faster than one call per text)."""
+    r = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": list(texts)}, timeout=60)
+    r.raise_for_status()
+    vecs = np.array(r.json()["embeddings"], dtype=np.float32)
+    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+
+
 
 class MemoryStore:
     def __init__(self, path=DB_PATH):

@@ -38,19 +38,22 @@ def _voice():
         _loaded[_current] = PiperVoice.load(f"{VOICES[_current]}.onnx")
     return _loaded[_current]
 
-
 def speak(text, tone="calm"):
     for word, sound in PRONOUNCE.items():
         text = text.replace(word, sound)
+    text = text.replace("; ", ". ")                # list items become separate sentences
     if tone == "gentle":
-        text = text.replace(", ", "... ")      # small pauses sound softer and more thoughtful
+        text = text.replace(", ", "... ")          # small pauses sound softer and more thoughtful
     chunks = list(_voice().synthesize(text, syn_config=TONES.get(tone, TONES["calm"])))
     if not chunks:
         return
-    audio = np.concatenate([c.audio_int16_array for c in chunks])
-    audio = np.concatenate([audio, np.zeros(int(0.4 * chunks[0].sample_rate), dtype=np.int16)])  # 0.4 s of silence so the end isn't cut off
-    
-    sd.play(audio, chunks[0].sample_rate)
+    rate = chunks[0].sample_rate
+    pause = np.zeros(int(0.3 * rate), dtype=np.int16)    # 0.3 s between sentences
+    parts = [np.zeros(int(0.15 * rate), dtype=np.int16)]   # tiny lead-in so the first word isn't swallowed
+    for c in chunks:                                      # Piper gives one chunk per sentence
+        parts += [c.audio_int16_array, pause]
+    parts.append(np.zeros(int(0.4 * rate), dtype=np.int16))   # so the end isn't cut off
+    sd.play(np.concatenate(parts), rate)
     sd.wait()
 
    

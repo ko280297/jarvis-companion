@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import numpy as np
 from memory import _embed
 from tools import resolve_dates
+from safety import is_unsafe, REFUSAL
 
 # Starter sections, with a short description so "capture" can guess where things go.
 # The user can create any other list just by naming it ("add X to my packing list").
@@ -112,6 +113,8 @@ def _spoken(items):
 
 def _add(memory, name, item):
     global _last_list
+    if is_unsafe(item):
+        return REFUSAL
     if name == "schedule":
         item = resolve_dates(item)      # Python works out the real date
     memory.list_add(name, item)
