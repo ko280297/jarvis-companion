@@ -18,10 +18,11 @@ import dashboard
 from tts import speak, set_voice
 from memory import MemoryStore, _embed, embed_many
 from tools import answer_time_question, resolve_dates
-from online import answer_online_question, run_tool_call
+from online import answer_online_question, run_tool_call, get_weather
 from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAMES, STARTER_LISTS
 from reminders import Reminders, handle_reminder_command
 from safety import is_unsafe, REFUSAL
+from summary import SUMMARY_Q, build_summary
 
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
@@ -49,7 +50,8 @@ ASSISTANT_NAME = "Jarvis"
 INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on this device, "
          "so everything you tell me stays with you.")
 CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
-                "set reminders and timers, tell you the date and time, and check the weather or news. "
+                "set reminders and timers, give you a summary of your day, tell you the date and time, "
+                "and check the weather or news. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(r"\b(bye|goodbye|that's all|thats all|that is all|nothing else|stop listening)\b")
 
@@ -227,6 +229,18 @@ def announce_due(reminders):
     print(f"⏰ {message}")
     ding()
     say(message, "⏰ reminder (on device)", tone="bright")
+
+def summary_weather(memory):
+    """A short weather line for the daily summary. The only online part."""
+    city = memory.get_setting("home_city")
+    if not city:
+        return None
+    try:
+        full = get_weather(city)
+    except requests.RequestException:
+        return "I couldn't check the weather right now, but everything else is up to date."
+    # the summary only needs "now" and rain; skip the high/low sentence
+    return " ".join(s for s in re.split(r"(?<=\.)\s+", full) if not s.startswith("Today's high"))
 
 
 def transcribe(stt, audio, memory):
@@ -549,7 +563,13 @@ def main():
             if not text:
                 say("", "⚙️ name saved on device", tone="bright")
                 continue
-
+        
+        # 0. Daily summary (Python only, plus weather)
+        if SUMMARY_Q.search(text.lower()):
+            summary = build_summary(memory, reminders, weather=lambda: summary_weather(memory))
+            say(summary, "☀️ daily summary (on device + weather)", tone="bright")
+            continue
+        
         # 1. Exact commands (fast, no LLM)
         if handle_command(text, memory, history, reminders):
             continue

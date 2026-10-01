@@ -142,6 +142,17 @@ class Reminders:
         ).fetchone()
         return (row[0], datetime.fromtimestamp(row[1]), bool(row[2])) if row else None
 
+    def find(self, question):
+        """The newest reminder that shares a real word with the question ('water', 'father'...)."""
+        skip = {"reminder", "remind", "when", "what", "that", "this", "last", "time", "about", "with"}
+        words = {w for w in re.findall(r"[a-z]+", question) if len(w) > 3} - skip
+        for text, due, done in self.db.execute(
+                "SELECT text, due, done FROM reminders WHERE kind = 'reminder' ORDER BY id DESC"):
+            if words & set(re.findall(r"[a-z]+", text.lower())):
+                return (text, datetime.fromtimestamp(due), bool(done))
+        return None
+
+
     def clear_all(self):
         self.db.execute("DELETE FROM reminders")
         self.db.commit()
@@ -180,15 +191,17 @@ def handle_reminder_command(text, rem):
         return f"Cancelled {n} {kind}{'s' if n != 1 else ''}." if n else f"You don't have any {kind}s set."
 
     if LAST_Q.search(t):
-        last = rem.last()
+        found = rem.find(t)                  # "...the reminder of drinking water?" -> that one
+        last = found or rem.last()
         if not last:
             return "You haven't set any reminders yet."
         text_, due, done = last
+        label = "That reminder" if found else "Your last reminder"
         clock = due.strftime("%I:%M %p").lstrip("0")
         if done or due <= datetime.now():
-            return f"Your last reminder was: {text_}, for {clock}."
-        return f"Your last reminder is: {text_}, {when_words(due)}."
-
+            return f"{label} was: {text_}, for {clock}."
+        return f"{label} is: {text_}, {when_words(due)}."
+    
     if LIST_Q.search(t):
         items = rem.upcoming()
         if not items:
