@@ -35,7 +35,7 @@ WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
 REMINDER_CHECK_EVERY = 12   # chunks (~1 second) between reminder checks while waiting
 REMINDER_DUE = "reminder_due"
-MAX_FOLLOW_UPS = 4   
+MAX_FOLLOW_UPS = 6  
 
 # ---------- Reasoning ----------
 CONFIDENCE_THRESHOLD = 0.85   # from testing: facts 0.9+, guesses below 0.75
@@ -53,7 +53,9 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
                 "set reminders and timers, give you a summary of your day, tell you the date and time, "
                 "and check the weather or news. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
-END_CONVERSATION = re.compile(r"\b(bye|goodbye|that's all|thats all|that is all|nothing else|stop listening)\b")
+END_CONVERSATION = re.compile(
+    r"\b(bye|goodbye|good night|that's all|thats all|that is all|nothing else|stop listening"
+    r"|talk to you later|ttyl|see you)\b")
 
 SYSTEM_PROMPT = (
     f"Your name is {ASSISTANT_NAME}. You are a warm, friendly companion, like a helpful friend. "
@@ -145,6 +147,15 @@ def ding():
     sd.play(tone.astype(np.float32), rate)
     sd.wait()
 
+def sleep_chime():
+    """Falling two-tone chime: 'I've stopped listening, say Hey Jarvis to wake me again.'"""
+    rate = 44100
+    t = np.linspace(0, 0.12, int(0.12 * rate), False)
+    fade = np.linspace(1, 0, t.size)
+    tone = np.concatenate([np.sin(2 * np.pi * 990 * t), np.sin(2 * np.pi * 660 * t)])
+    tone = 0.4 * tone * np.concatenate([fade, fade])
+    sd.play(tone.astype(np.float32), rate)
+    sd.wait()
 
 def rms(frame):
     """Loudness of one audio chunk."""
@@ -349,6 +360,23 @@ def strip_address(text):
         words = words[i + 1:]
     return " ".join(words).strip(" ,") or text
 
+COMMAND_WORDS = ["cancel", "remind", "remember", "clear", "remove", "delete", "capture", "forget"]
+
+
+def fix_command_word(text):
+    """Speech-to-text sometimes mishears the first word of a command ('cancer all reminders').
+    If it's very close to a command word, use the command word."""
+    words = text.split()
+    if not words:
+        return text
+    first = words[0].lower().strip(",.!?")
+    if first in COMMAND_WORDS:
+        return text
+    best = max(COMMAND_WORDS, key=lambda w: SequenceMatcher(None, first, w).ratio())
+    if SequenceMatcher(None, first, best).ratio() >= 0.8:
+        print(f"   (heard '{first}', using '{best}')")
+        return " ".join([best] + words[1:])
+    return text
 
 def take_introduction(text, memory):
     """'I am Krati, who are you?' -> saves the name and returns the rest: 'who are you?'.
@@ -487,6 +515,7 @@ def main():
     history = [{"role": "system", "content": SYSTEM_PROMPT}]
     follow_up = False
     follow_count = 0
+    chime_next = False
     print(f"Ready! ({time.time() - t0:.1f}s)")
 
     while True:
@@ -494,6 +523,10 @@ def main():
             announce_due(reminders)
             follow_up = True
             continue
+        if chime_next:
+            sleep_chime()
+            print("   (conversation limit reached: say 'Hey Jarvis' to continue)")
+            chime_next = False
         dashboard.update(memories=len(memory.all()))
         audio = listen(wake, reminders, follow_up)
         if isinstance(audio, str):       # a reminder or timer is due
@@ -518,11 +551,13 @@ def main():
             follow_up = False
             continue
         print(f"You: {text}")
-        text = strip_address(text)
+        text = fix_command_word(strip_address(text))
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
         follow_count = follow_count + 1 if follow_up else 0
         follow_up = follow_count < MAX_FOLLOW_UPS     # keep listening briefly, but not forever
-        if END_CONVERSATION.search(text.lower()):
+        chime_next = not follow_up           # limit reached: play the sleep chime after this reply
+        short_by = len(text.split()) <= 3 and text.lower().startswith("by ")
+        if END_CONVERSATION.search(text.lower()) or short_by:
             say("Okay, talk soon!", "👋 conversation ended", tone="bright")
             follow_up = False
             continue
@@ -643,9 +678,11 @@ def main():
             route_name = "🤔 not sure (guess withheld)"
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
+                # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(
             r"\b(i'll|i will|i've|i have|let me)\s+(?:make sure\b|"
-            r"(?:remind|set|call|text|send|book|order|schedule|add|save|remove|note|check))"
+            r"(?:remind|set|call|text|send|book|order|schedule|add|save|remove|note|check"
+            r"|clear|delete|cancel|change|update))"
             r"|\b(added|removed|saved|scheduled|noted)\b",
             reply.lower())
         if promise and not declined:

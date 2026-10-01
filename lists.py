@@ -22,11 +22,14 @@ MAX_ITEM_LENGTH = 200
 _last_list = ""             # so "add it to that list" works
 
 # ---------- Fast path: exact commands ----------
-_LIST = r"(?:my\s+|the\s+)?([a-z]+(?:\s[a-z]+){0,2}?)(?:\s+list)?"
-FILLER = re.compile(r"^(?:(?:oh|ok|okay|so|and|please|can you|could you|i want you to)[,]?\s+)+", re.I)
-ADD = re.compile(rf"^(?:add|put|at)\s+(.+)\s+(?:to|in|into|on)\s+{_LIST}$")
+_LIST = r"(?:my\s+|the\s+)?([a-z]+(?:\s[a-z]+){0,2}?)(?:\s+list)?(?:\s+(?:too|also|as well|please))?"
+FILLER = re.compile(
+    r"^(?:(?:oh|ok|okay|so|or|yes|yeah|really|just|please|can you|could you"
+    r"|i want you to|i'm saying to you)[,]?\s+)+", re.I)
+# "and" / "at" are how speech-to-text often mishears "add"
+ADD = re.compile(rf"^((?:(?:add|put|and|at)[,]?\s+)+)(.+)\s+(?:to|in|into|on)\s+{_LIST}$")
 REMOVE = re.compile(rf"^(?:remove|delete)\s+(.+)\s+from\s+{_LIST}$")
-CLEAR = re.compile(rf"^(?:clear|empty)\s+{_LIST}$")
+CLEAR = re.compile(rf"^(?:clear|empty|delete)\s+{_LIST}$")
 SHOW = re.compile(
     rf"^(?:what(?:'s| is)\s+(?:on|in)|what do (?:i|we) have\s+(?:on|in)|read|read me|show me|tell me)\s+{_LIST}$")
 CAPTURE = re.compile(r"^(?:capture|note down|jot down)[:,]?\s+(?:that\s+|and\s+)?(.+)$")
@@ -51,11 +54,18 @@ LIST_TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "remove_from_list",
-        "description": "Remove an item from one of the user's lists.",
+        "description": "Remove one item from one of the user's lists.",
         "parameters": {"type": "object", "properties": {
             "list_name": {"type": "string", "description": "List name only, e.g. grocery."},
             "item": {"type": "string", "description": "The thing to remove."},
         }, "required": ["item"]},
+    }},
+    {"type": "function", "function": {
+        "name": "clear_list",
+        "description": "Clear or delete a whole list, removing everything on it.",
+        "parameters": {"type": "object", "properties": {
+            "list_name": {"type": "string", "description": "List name only, e.g. grocery."},
+        }, "required": ["list_name"]},
     }},
     {"type": "function", "function": {
         "name": "show_all_lists",
@@ -77,6 +87,10 @@ def normalize(name):
     return name
 
 
+def _known_lists(memory):
+    return set(memory.list_names()) | set(STARTER_LISTS)
+
+
 def match_list(name, memory):
     """Map what the user said to a real list:
     'good grocery' -> 'grocery', 'groceries' -> 'grocery', 'that list' -> the last list used.
@@ -87,7 +101,7 @@ def match_list(name, memory):
         return _last_list
     if not name:
         return ""
-    known = set(memory.list_names()) | set(STARTER_LISTS)
+    known = _known_lists(memory)
     for k in known:
         if k in name.split():               # "good grocery" contains "grocery"
             return k
@@ -107,8 +121,15 @@ def _classify(item, memory):
     return best if scores[best] >= CAPTURE_THRESHOLD else "inbox"
 
 
-def _spoken(items):
-    return "; ".join(re.sub(r"\s*\[date: (.*?)\]", r", on \1", i) for i in items)
+def _spoken_item(item):
+    """'meeting on Friday [date: Friday, 2 October 2026]' -> 'meeting on Friday, 2 October 2026'."""
+    m = re.search(r"\s*\[date: (\w+), (.*?)\]", item)
+    if not m:
+        return item
+    base, weekday, rest = item[:m.start()], m.group(1), m.group(2)
+    if weekday.lower() in base.lower():
+        return f"{base}, {rest}"
+    return f"{base}, on {weekday}, {rest}"
 
 
 def _add(memory, name, item):
@@ -128,14 +149,18 @@ def _read(memory, name):
         return f"Your {name} list is empty."
     _last_list = name
     items = memory.list_get(name)
-    return f"Your {name} list has {len(items)} item{'s' if len(items) != 1 else ''}: {_spoken(items)}."
+    spoken = "; ".join(_spoken_item(i) for i in items)
+    return f"Your {name} list has {len(items)} item{'s' if len(items) != 1 else ''}: {spoken}."
 
 
 def _all_lists(memory):
     names = memory.list_names()
     if not names:
         return "You don't have any lists yet."
-    parts = [f"{n}, with {len(memory.list_get(n))}" for n in names]
+    parts = []
+    for n in names:
+        count = len(memory.list_get(n))
+        parts.append(f"{n}, with {count} item{'s' if count != 1 else ''}")
     return f"You have {len(names)} list{'s' if len(names) != 1 else ''}: " + "; ".join(parts) + "."
 
 
@@ -145,10 +170,16 @@ def _remove(memory, name, item):
     return f"I couldn't find that on your {name} list."
 
 
+def _clear(memory, name):
+    if name in memory.list_names():
+        memory.list_clear(name)
+        return f"Done, your {name} list is cleared."
+    return f"You don't have a {name} list." if name else "Which list should I clear?"
+
+
 # ---------- Fast path ----------
-def handle_list_command(text, memory):
-    """Exact commands. Returns a spoken reply, or None if this isn't one."""
-    clean = FILLER.sub("", text.strip(" .!?,"))
+def _one_command(sentence, memory):
+    clean = FILLER.sub("", sentence.strip(" .!?,"))
     lower = clean.lower()
 
     m = CAPTURE.match(lower)
@@ -158,8 +189,14 @@ def handle_list_command(text, memory):
 
     m = ADD.match(lower)
     if m:
-        name = match_list(m.group(2), memory) or _classify(clean[m.start(1):m.end(1)], memory)
-        return _add(memory, name, clean[m.start(1):m.end(1)])
+        item = clean[m.start(2):m.end(2)]
+        name = match_list(m.group(3), memory)
+        weak_verb = not re.search(r"\b(add|put)\b", m.group(1))     # only "and"/"at"
+        if weak_verb and name not in _known_lists(memory):
+            return None      # "and ... in my list" might not be an add at all
+        if re.match(r"(what|who|how|where|when|why)\b", item.lower()):
+            return None      # it's a question, not an item
+        return _add(memory, name or _classify(item, memory), item)
 
     m = REMOVE.match(lower)
     if m:
@@ -168,18 +205,24 @@ def handle_list_command(text, memory):
     m = CLEAR.match(lower)
     if m:
         name = match_list(m.group(1), memory)
-        if name in memory.list_names():
-            memory.list_clear(name)
-            return f"Your {name} list is now empty."
-        return None
+        return _clear(memory, name) if name in memory.list_names() else None
 
     m = SHOW.match(lower)
     if m:
         name = match_list(m.group(1), memory)
-        if name in memory.list_names() or name in STARTER_LISTS:
+        if name in _known_lists(memory):
             return _read(memory, name)
         return None      # not a list at all, e.g. "tell me the news"
 
+    return None
+
+
+def handle_list_command(text, memory):
+    """Exact commands, checked sentence by sentence. Returns a spoken reply, or None."""
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        reply = _one_command(sentence, memory)
+        if reply:
+            return reply
     return None
 
 
@@ -201,6 +244,8 @@ def run_list_tool(name, args, memory):
         if not item or not list_name:
             return "Which item, and from which list?"
         return _remove(memory, list_name, item)
+    if name == "clear_list":
+        return _clear(memory, list_name)
     if name == "show_all_lists":
         return _all_lists(memory)
     return None
