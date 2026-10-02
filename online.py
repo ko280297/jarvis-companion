@@ -156,6 +156,16 @@ def run_tool_call(name, args, home_city=None):
     _log_blocked(name, str(args))    # unknown tool: refuse
     return None
 
+def check_place(city):
+    """Is this a real place? Returns 'Name, Country' if found, None if not found, '' if offline.
+    Only the city name leaves the device, and it's logged like every other call."""
+    try:
+        place = _geocode(city)
+    except requests.RequestException:
+        return ""
+    if place is None:
+        return None
+    return f"{place['name']}, {place['country']}" if place.get("country") else place["name"]
 
 
 if __name__ == "__main__":

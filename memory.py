@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import time
 import numpy as np
@@ -6,22 +7,30 @@ import requests
 DB_PATH = "memories.db"
 EMBED_URL = "http://localhost:11434/api/embed"
 EMBED_MODEL = "all-minilm"
+KEEP_ALIVE = "30m"     # keep the small embedding model loaded, so searches stay fast
+
+
+def _core(text):
+    """What a memory is about, without bookkeeping like '(saved on ...)' or '[date: ...]'."""
+    return re.sub(r"\s*\[date:.*?\]", "", text.split(" (saved on")[0]).strip()
 
 
 def _embed(text):
     """Turn text into a vector (a list of numbers that captures its meaning)."""
-    r = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": text}, timeout=60)
+    r = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": text,
+                                       "keep_alive": KEEP_ALIVE}, timeout=60)
     r.raise_for_status()
     v = np.array(r.json()["embeddings"][0], dtype=np.float32)
     return v / np.linalg.norm(v)
 
+
 def embed_many(texts):
     """Embed many texts in ONE call (much faster than one call per text)."""
-    r = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": list(texts)}, timeout=60)
+    r = requests.post(EMBED_URL, json={"model": EMBED_MODEL, "input": list(texts),
+                                       "keep_alive": KEEP_ALIVE}, timeout=60)
     r.raise_for_status()
     vecs = np.array(r.json()["embeddings"], dtype=np.float32)
     return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
-
 
 
 class MemoryStore:
@@ -42,7 +51,7 @@ class MemoryStore:
 
     # ---------- Free-form memories ----------
     def add(self, text):
-        vec = _embed(text)
+        vec = _embed(_core(text))          # search by meaning of the fact itself, not the date note
         self.db.execute(
             "INSERT INTO memories (text, created, vec) VALUES (?, ?, ?)",
             (text, time.time(), vec.tobytes()),
@@ -70,6 +79,15 @@ class MemoryStore:
         self.db.execute("DELETE FROM list_items")
         self.db.commit()
         return count
+
+    def reindex(self):
+        """Re-embed every saved memory using only its core text (run once after updating this file)."""
+        rows = self.db.execute("SELECT id, text FROM memories").fetchall()
+        for rid, text in rows:
+            vec = _embed(_core(text))
+            self.db.execute("UPDATE memories SET vec = ? WHERE id = ?", (vec.tobytes(), rid))
+        self.db.commit()
+        return len(rows)
 
     def search(self, query, k=3, min_score=0.5):
         rows = self.db.execute("SELECT text, vec FROM memories").fetchall()
@@ -110,7 +128,7 @@ class MemoryStore:
         self.db.execute("DELETE FROM list_items WHERE list = ?", (name,))
         self.db.commit()
 
-    # ---------- Settings (home city, user name, ...) ----------
+    # ---------- Settings (home city, user name, voice, ...) ----------
     def set_setting(self, key, value):
         self.db.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
@@ -122,13 +140,3 @@ class MemoryStore:
             "SELECT value FROM settings WHERE key = ?", (key,)
         ).fetchone()
         return row[0] if row else None
-
-
-if __name__ == "__main__":
-    m = MemoryStore("test_memories.db")
-    m.list_add("grocery", "milk")
-    m.list_add("grocery", "eggs")
-    print("grocery ->", m.list_get("grocery"))
-    print("lists   ->", m.list_names())
-    m.list_remove("grocery", "milk")
-    print("after removing milk ->", m.list_get("grocery"))

@@ -1,8 +1,8 @@
 import json
 import math
 import re
-import time
 import threading
+import time
 from collections import deque
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -18,24 +18,24 @@ import dashboard
 from tts import speak, set_voice
 from memory import MemoryStore, _embed, embed_many
 from tools import answer_time_question, resolve_dates
-from online import answer_online_question, run_tool_call, get_weather
+from online import answer_online_question, run_tool_call, get_weather, check_place
 from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAMES, STARTER_LISTS
 from reminders import Reminders, handle_reminder_command
-from safety import is_unsafe, REFUSAL
 from summary import SUMMARY_Q, build_summary
+from safety import is_unsafe, REFUSAL
 
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
 MAX_RECORD_SECONDS = 8      # longest question allowed
-SILENCE_TO_STOP = 1.5     # seconds of quiet that ends the question
+SILENCE_TO_STOP = 1.5       # seconds of quiet that ends the question
 NO_SPEECH_TIMEOUT = 4.0     # after the wake word: give up if nothing is said
 FOLLOW_UP_SECONDS = 7.0     # conversation mode: how long to wait for a reply without the wake word
+MAX_FOLLOW_UPS = 6          # after this many turns without the wake word, go back to waiting for it
 WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
 REMINDER_CHECK_EVERY = 12   # chunks (~1 second) between reminder checks while waiting
 REMINDER_DUE = "reminder_due"
-MAX_FOLLOW_UPS = 6  
 
 # ---------- Reasoning ----------
 CONFIDENCE_THRESHOLD = 0.85   # from testing: facts 0.9+, guesses below 0.75
@@ -44,6 +44,7 @@ STRONG_GATE = 0.70            # above this: trust the gate even if the router he
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
+NUM_CTX = 2048                # our replies are short; a smaller context saves RAM on the Pi
 
 # ---------- Personality ----------
 ASSISTANT_NAME = "Jarvis"
@@ -56,6 +57,7 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
 END_CONVERSATION = re.compile(
     r"\b(bye|goodbye|good night|that's all|thats all|that is all|nothing else|stop listening"
     r"|talk to you later|ttyl|see you)\b")
+START_OVER = re.compile(r"\b(start (?:over|again|fresh|from scratch)|reset (?:the )?conversation|new conversation)\b")
 
 SYSTEM_PROMPT = (
     f"Your name is {ASSISTANT_NAME}. You are a warm, friendly companion, like a helpful friend. "
@@ -68,11 +70,14 @@ SYSTEM_PROMPT = (
     "If a memory contains [date: ...], use exactly that date and never calculate dates yourself. "
     "If the user's saved memories answer the question, answer only what was asked, "
     "using just the relevant part of the memory. Do not repeat the whole memory. "
+    "If several saved memories answer the question, mention all of them. "
     "If the user asks about their own life and it is not in their memories, "
     "say you don't have that saved. "
     "If you are not sure about something, say you don't know instead of guessing. "
     "You cannot change settings. Never claim you saved, set, or changed anything. "
-    "You cannot see or change the user's lists. Never say you added, removed, or saved anything."
+    "You cannot see or change the user's lists. Never say you added, removed, or saved anything. "
+    "Only your user talks to you, unless memories say otherwise. "
+    "Never guess anyone's name: if a person's name is not in the saved memories, say you don't know it."
 )
 
 TOOLS = [
@@ -118,11 +123,13 @@ INTENT_EXAMPLES = [
 ]
 
 
-# ---------- Output ----------
-_greeting = ""    # e.g. "Nice to meet you, Krati!" to put in front of the next reply
+# ---------- Conversation state ----------
+_greeting = ""         # e.g. "Nice to meet you, Krati!" to put in front of the next reply
 _pending_name = None   # waiting for "yes/no": should I really change the user's name?
-_last_reminder = None   # (text, due time) of the last reminder spoken, for "when was that reminder?"
+_expect_city = False   # just set or asked about the city -> "No, it's Pune" / "P-U-N-E" corrects it
 
+
+# ---------- Output ----------
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
     global _greeting
@@ -137,25 +144,25 @@ def say(text, route, confidence=None, tone="calm"):
 _threshold = 300.0    # speech loudness threshold, learned from the room while waiting for the wake word
 
 
-def ding():
-    """Short two-tone chime so the user knows when to start speaking."""
+def _chime(first_hz, second_hz, volume):
     rate = 44100
     t = np.linspace(0, 0.12, int(0.12 * rate), False)
     fade = np.linspace(1, 0, t.size)
-    tone = np.concatenate([np.sin(2 * np.pi * 660 * t), np.sin(2 * np.pi * 990 * t)])
-    tone = 0.6 * tone * np.concatenate([fade, fade])
+    tone = np.concatenate([np.sin(2 * np.pi * first_hz * t), np.sin(2 * np.pi * second_hz * t)])
+    tone = volume * tone * np.concatenate([fade, fade])
     sd.play(tone.astype(np.float32), rate)
     sd.wait()
 
+
+def ding():
+    """Rising chime: 'I'm listening, go ahead.'"""
+    _chime(660, 990, 0.6)
+
+
 def sleep_chime():
-    """Falling two-tone chime: 'I've stopped listening, say Hey Jarvis to wake me again.'"""
-    rate = 44100
-    t = np.linspace(0, 0.12, int(0.12 * rate), False)
-    fade = np.linspace(1, 0, t.size)
-    tone = np.concatenate([np.sin(2 * np.pi * 990 * t), np.sin(2 * np.pi * 660 * t)])
-    tone = 0.4 * tone * np.concatenate([fade, fade])
-    sd.play(tone.astype(np.float32), rate)
-    sd.wait()
+    """Falling chime: 'I've stopped listening, say Hey Jarvis to wake me again.'"""
+    _chime(990, 660, 0.4)
+
 
 def rms(frame):
     """Loudness of one audio chunk."""
@@ -185,7 +192,7 @@ def listen(wake, reminders, follow_up=False):
                 frame = frame.flatten()
                 noise.append(rms(frame))
                 if max(wake.predict(frame).values()) > WAKE_THRESHOLD:
-                    prewarm()
+                    prewarm()       # LLM starts loading while the user is still speaking
                     break
                 checks += 1
                 if checks % REMINDER_CHECK_EVERY == 0 and reminders.due_now():
@@ -221,15 +228,12 @@ def listen(wake, reminders, follow_up=False):
 def announce_due(reminders):
     """Speak every reminder or timer whose time has come, together, with one chime.
     If one was missed (e.g. the device was off), say when it was meant for."""
-    global _last_reminder
     lines = []
     for rid, text, kind, due_ts in reminders.due_now():
         reminders.mark_done(rid)
         what = "your timer is done" if kind == "timer" else text
         if time.time() - due_ts > 120:                       # more than 2 minutes late
             what += f", which was for {datetime.fromtimestamp(due_ts):%I:%M %p}".replace(" 0", " ")
-        
-        _last_reminder = (what, datetime.fromtimestamp(due_ts))
         lines.append(what)
     if not lines:
         return
@@ -237,9 +241,9 @@ def announce_due(reminders):
         message = f"Reminder: {lines[0]}."
     else:
         message = f"You have {len(lines)} reminders. " + ". ".join(lines) + "."
-    print(f"⏰ {message}")
     ding()
     say(message, "⏰ reminder (on device)", tone="bright")
+
 
 def summary_weather(memory):
     """A short weather line for the daily summary. The only online part."""
@@ -287,7 +291,7 @@ def route(text, tools):
         "keep_alive": "30m",
         "tools": tools,
         "messages": [{"role": "user", "content": text}],
-        "options": {"temperature": 0, "num_predict": 40},
+        "options": {"temperature": 0, "num_predict": 40, "num_ctx": NUM_CTX},
     }, stream=True, timeout=60) as response:
         response.raise_for_status()
         for line in response.iter_lines():
@@ -313,6 +317,7 @@ def context_message(memory):
     who = f"The user's name is {name}. Use it now and then, not in every reply. " if name else ""
     return {"role": "system", "content": f"{who}It is currently {part}."}
 
+
 def prewarm():
     """Start loading the LLM in the background, so it's ready by the time we need it."""
     def _load():
@@ -322,8 +327,7 @@ def prewarm():
         except requests.RequestException:
             pass
     threading.Thread(target=_load, daemon=True).start()
-    
-    
+
 
 def think(messages):
     """Returns (reply, confidence). Confidence comes from the model's own token probabilities."""
@@ -333,7 +337,7 @@ def think(messages):
         "stream": False,
         "keep_alive": "30m",
         "logprobs": True,
-        "options": {"temperature": 0, "num_predict": 80},
+        "options": {"temperature": 0, "num_predict": 80, "num_ctx": NUM_CTX},
     }, timeout=120)
     if response.status_code != 200:
         print("⚠️ Ollama says:", response.text)
@@ -345,7 +349,7 @@ def think(messages):
     return reply, confidence
 
 
-# ---------- Commands ----------
+# ---------- Text helpers ----------
 def strip_address(text):
     """'Ok Jarvis, what's the weather?' / 'What's on my list, Jarvis?' -> just the request.
     Also catches mishearings like 'Jardis', by comparing how similar the word is to the name."""
@@ -359,6 +363,7 @@ def strip_address(text):
     if len(words) > i + 1 and is_name(words[i]):                 # name at the start
         words = words[i + 1:]
     return " ".join(words).strip(" ,") or text
+
 
 COMMAND_WORDS = ["cancel", "remind", "remember", "clear", "remove", "delete", "capture", "forget"]
 
@@ -378,47 +383,120 @@ def fix_command_word(text):
         return " ".join([best] + words[1:])
     return text
 
-def take_introduction(text, memory):
-    """'I am Krati, who are you?' -> saves the name and returns the rest: 'who are you?'.
-    Returns (rest_of_text, name_or_None)."""
+
+def take_introduction(text):
+    """'I am Krati, who are you?' -> ('who are you?', 'Krati'). Does NOT save the name:
+    main() decides, and asks first if it would replace a different saved name."""
     t = re.sub(r"^(?:hi|hello|hey)[,!.]?\s+", "", text.strip(), flags=re.I)
-    m = re.match(r"(?:my name is|call me|the user is|user is)\s+([A-Za-z]+)\b(?!')[,.!]?\s*(.*)$", t, re.I)
-    if not m:
-        # "I am ..." only counts when the next word is capitalised: "I am Krati" yes, "I am tired" no
-        m = re.match(r"(?:I am|I'm|This is)\s+([A-Z][a-z]+)\b(?!')[,.!]?\s*(.*)$", t)
-    if not m:
-        return text, None
-    name = m.group(1).title()
-    
-    return m.group(2).strip(), name
+    m = re.search(r"\b(?:my name is|call me|the user is|user is)\s+([A-Za-z]+)\b(?!')[,.!]?\s*", t, re.I)
+    if m:   # anywhere in the sentence: "we've talked before... my name is Shubhangi"
+        rest = (t[:m.start()] + " " + t[m.end():]).strip(" ,.")
+        return rest, m.group(1).title()
+    # "I am ..." only counts when the next word is capitalised: "I am Krati" yes, "I am tired" no
+    m = re.match(r"(?:I am|I'm|This is)\s+([A-Z][a-z]+)\b(?!')[,.!]?\s*(.*)$", t)
+    if m:
+        return m.group(2).strip(), m.group(1).title()
+    return text, None
+
+
+SPELLED = re.compile(r"\b[a-z](?:[\s\-.,]+[a-z]\b){2,}")
+
+
+def spelled_word(lower):
+    """'p-u-n-e' / 'p u n e' (a word spelled letter by letter) -> 'pune', or None."""
+    m = SPELLED.search(lower)
+    return re.sub(r"[^a-z]", "", m.group(0)) if m else None
+
+
+def clean_city(name):
+    """'mumbai now' / 'just mumbai' -> 'Mumbai' (drop little filler words around the name)."""
+    name = re.sub(r"\b(now|please|instead|actually|only|just|then|currently|thanks|thank you)\b", " ", name)
+    return " ".join(name.split()).title()
+
+
+def save_city(city, memory):
+    """Check the place exists, then save it. Returns the spoken reply."""
+    global _expect_city
+    found = check_place(city)
+    if found == "":   # offline: can't check, so don't overwrite a good city with a guess
+        _expect_city = False
+        old = memory.get_setting("home_city")
+        if old:
+            return f"I can't check places right now because I'm offline, so I'll keep {old} for now."
+        return "I can't check places right now because I'm offline. Please tell me your city again later."
+    if found is None:
+        _expect_city = True
+        return f"I couldn't find a place called {city}. Could you spell it for me, letter by letter?"
+    memory.set_setting("home_city", city)
+    _expect_city = True                # allow a quick "No, it's ..." correction next
+    return f"Got it, your city is {found}."
+
+
+# ---------- Commands ----------
+RELATIONS = r"(friend|sister|brother|mother|mom|father|dad|cousin|colleague|wife|husband|partner)"
+PERSON = re.compile(
+    rf"\b(?:this is|meet) my {RELATIONS}[,]?\s+([a-z]+)"
+    rf"|\bmy {RELATIONS}'?s? name is\s+([a-z]+)")
 
 
 def handle_command(text, memory, history, reminders):
-    """Handle reminder / list / voice / identity / city / remember / forget commands.
+    """Handle reminder / list / people / voice / identity / city / remember / forget commands.
     Returns True if handled."""
+    global _expect_city
     lower = text.lower().strip(" .!?,")
 
     reminder_reply = handle_reminder_command(text, reminders)
     if reminder_reply:
-        print(f"⏰ {reminder_reply}")
         say(reminder_reply, "⏰ reminders (on device)")
         return True
 
     list_reply = handle_list_command(text, memory)
     if list_reply:
-        print(f"📝 {list_reply}")
         say(list_reply, "📝 lists (on device)")
         return True
 
+    # ----- People -----
+    m = PERSON.search(lower)
+    if m:   # "This is my friend Shubhangi" / "My friend's name is Shubhangi"
+        relation = m.group(1) or m.group(3)
+        person = (m.group(2) or m.group(4)).title()
+        memory.add(f"My {relation}'s name is {person} (saved on {date.today():%A, %d %B %Y})")
+        print(f"🙂 Remembered: my {relation} is {person}")
+        say(f"Nice to meet you, {person}! I'll remember that.", "💾 person saved to memory", tone="bright")
+        return True
+
+    m = re.search(rf"\bwho (?:is|are) my {RELATIONS}s?\b|\bmy {RELATIONS}s?'?s? names?\b", lower)
+    if m:   # "Who are my friends?" / "What's my sister's name?" -> read straight from memory
+        relation = m.group(1) or m.group(2)
+        people = []
+        for t in memory.all():
+            core = t.split(" (saved on")[0]
+            p = re.search(rf"\bmy {relation}'s name is (\w+)", core, re.I)
+            if not p and relation == "friend":
+                p = re.match(r"(\w+) is a friend of", core)      # guests saved earlier
+            if p:
+                people.append(p.group(1).title())
+        people = list(dict.fromkeys(people))                     # no repeats
+        if not people:
+            say(f"I don't know your {relation}'s name yet. You can say, this is my {relation}, and their name.",
+                "👥 people (on device)")
+        elif len(people) == 1:
+            say(f"Your {relation} is {people[0]}.", "👥 people (on device)")
+        else:
+            names = ", ".join(people[:-1]) + " and " + people[-1]
+            say(f"Your {relation}s are {names}.", "👥 people (on device)")
+        return True
+
+    # ----- Voice -----
     m = re.search(r"\b(male|female|man|woman|boy|girl)(?:'s)? voice\b", lower)
     if m and re.search(r"\b(use|switch|change|speak|talk|sound)\b", lower):
         kind = "female" if m.group(1) in ("female", "woman", "girl") else "male"
         set_voice(kind)
         memory.set_setting("voice", kind)
-        print(f"🎙️ Voice set: {kind}")
         say(f"Sure! This is my {kind} voice. How do I sound?", "⚙️ voice changed on device", tone="bright")
         return True
 
+    # ----- About Jarvis -----
     if re.match(r"(who are you|what(?:'s| is) your name|introduce yourself)", lower):
         say(INTRO, f"🙂 about {ASSISTANT_NAME}", tone="bright")
         return True
@@ -427,17 +505,36 @@ def handle_command(text, memory, history, reminders):
         say(CAPABILITIES, f"🙂 about {ASSISTANT_NAME}")
         return True
 
+    # ----- City -----
+    if _expect_city:   # right after a city was set or asked: "No, it's Pune" / "It's just Mumbai" / "P-U-N-E"
+        _expect_city = False
+        fixed = spelled_word(lower)
+        if not fixed:
+            words = re.findall(r"\b(?:it'?s|it is|i said|i meant)\s+(?!not\b)([a-z][a-z ]*)", lower)
+            fixed = words[-1] if words else None
+        if fixed and not re.search(r"\b(weather|news|time|date|reminder|list|day)\b", fixed):
+            say(save_city(clean_city(fixed), memory), "⚙️ city corrected on device")
+            return True
+
     m = re.match(
-        r"(?:my (?:current |home )?city is"
-        r"|(?:set|change) my (?:current |home )?city (?:to|as)"
-        r"|i live in)\s+(.+)", lower)
+        r"(?:(?:currently\s+)?my (?:current |home )?(?:city|location) is"
+        r"|(?:set|change|update) my (?:current |home )?(?:city|location) (?:to|as)"
+        r"|i live in|i(?:'m| am) (?:now |currently )?(?:residing |reciting |staying |living |based )?in)"
+        r"\s+([a-z][a-z ]*?)(?:[,.].*)?$", lower)
     if m:
-        city = m.group(1).strip().title()
-        memory.set_setting("home_city", city)
-        print(f"🏠 Home city set: {city}")
-        say(f"Got it, your city is {city}.", "⚙️ setting saved on device")
+        city = clean_city(spelled_word(lower) or m.group(1))
+        say(save_city(city, memory), "⚙️ city saved on device")
         return True
 
+    if re.search(r"\bwhat(?:'s| is) my (?:current |home )?(?:city|location)\b|\bwhere (?:do i live|am i)\b", lower):
+        city = memory.get_setting("home_city")
+        _expect_city = True            # so "No, it's Delhi now" right after this corrects it
+        say(f"Your city is set to {city}." if city else "I don't know your city yet. You can say, my city is...",
+            "⚙️ city (on device)")
+        return True
+   
+
+    # ----- Memory -----
     if lower.startswith("remember"):
         fact = text[len("remember"):].strip(" ,.")
         if fact.lower().startswith("that "):
@@ -528,6 +625,7 @@ def main():
             print("   (conversation limit reached: say 'Hey Jarvis' to continue)")
             chime_next = False
         dashboard.update(memories=len(memory.all()))
+
         audio = listen(wake, reminders, follow_up)
         if isinstance(audio, str):       # a reminder or timer is due
             announce_due(reminders)
@@ -542,6 +640,7 @@ def main():
         dashboard.update(status="thinking")
         text = transcribe(stt, audio, memory)
         text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", text).strip()     # drop [BLANK_AUDIO], (music) anywhere
+        text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
             print(f"   (ignored repeated phrase, probably background noise: {text})")
@@ -553,16 +652,23 @@ def main():
         print(f"You: {text}")
         text = fix_command_word(strip_address(text))
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
+
         follow_count = follow_count + 1 if follow_up else 0
         follow_up = follow_count < MAX_FOLLOW_UPS     # keep listening briefly, but not forever
-        chime_next = not follow_up           # limit reached: play the sleep chime after this reply
+        chime_next = not follow_up                    # limit reached: play the sleep chime after this reply
+
         short_by = len(text.split()) <= 3 and text.lower().startswith("by ")
         if END_CONVERSATION.search(text.lower()) or short_by:
             say("Okay, talk soon!", "👋 conversation ended", tone="bright")
-            follow_up = False
+            follow_up, chime_next = False, False
             continue
 
-        
+        if START_OVER.search(text.lower()):
+            del history[1:]
+            _pending_name = None
+            say("Okay, fresh start! What would you like to talk about?", "🔄 conversation reset", tone="bright")
+            continue
+
         # Waiting for yes/no on a name change?
         if _pending_name:
             name, _pending_name = _pending_name, None
@@ -572,7 +678,11 @@ def main():
                 say(f"Done, I'll call you {name} from now on.", "⚙️ name saved on device", tone="bright")
                 continue
             if re.match(r"(no|nope|don't|do not)\b", text.lower()):
-                say(f"Okay, I'll keep calling you {memory.get_setting('user_name')}.", "⚙️ name unchanged")
+                user = memory.get_setting("user_name")
+                memory.add(f"{name} is a friend of {user} (saved on {date.today():%A, %d %B %Y})")
+                print(f"🙂 Guest remembered: {name}")
+                say(f"Got it, {name}! {user} is still my main user, and I'll remember you're {user}'s friend.",
+                    "⚙️ guest remembered", tone="bright")
                 continue
 
         # Questions about the user's name: answer from the saved setting, never from the LLM
@@ -583,7 +693,7 @@ def main():
             continue
 
         # "I am Krati, who are you?" -> handle the name, then answer the rest
-        text, new_name = take_introduction(text, memory)
+        text, new_name = take_introduction(text)
         if new_name:
             current = memory.get_setting("user_name")
             if current and current.lower() != new_name.lower():
@@ -598,13 +708,13 @@ def main():
             if not text:
                 say("", "⚙️ name saved on device", tone="bright")
                 continue
-        
+
         # 0. Daily summary (Python only, plus weather)
         if SUMMARY_Q.search(text.lower()):
             summary = build_summary(memory, reminders, weather=lambda: summary_weather(memory))
             say(summary, "☀️ daily summary (on device + weather)", tone="bright")
             continue
-        
+
         # 1. Exact commands (fast, no LLM)
         if handle_command(text, memory, history, reminders):
             continue
@@ -612,14 +722,12 @@ def main():
         # 2. Date and time (Python, offline)
         tool_answer = answer_time_question(text)
         if tool_answer:
-            print(f"🕐 {tool_answer}")
             say(tool_answer, "🕐 device clock (offline)")
             continue
 
         # 3. Obvious weather / news (rules)
         online_answer = answer_online_question(text, memory.get_setting("home_city"))
         if online_answer:
-            print(f"AI:  {online_answer}")
             say(online_answer, "🌐 internet (rule)")
             continue
 
@@ -630,12 +738,12 @@ def main():
         wants_lists = category == "lists" and score >= GATE_THRESHOLD
         wants_online = category != "lists" and score >= GATE_THRESHOLD and not found
         if wants_lists or wants_online:
-            t0 = time.time()
+            t1 = time.time()
             call = route(text, LIST_TOOLS if wants_lists else TOOLS)
             if call is None and wants_online and score >= STRONG_GATE:
                 call = {"name": category, "arguments": {}}
                 print(f"🚦 Router hesitated, gate is confident → {category}")
-            print(f"🧭 Router: {call['name'] + ' ' + str(call.get('arguments')) if call else 'no tool'}  ({time.time() - t0:.1f}s)")
+            print(f"🧭 Router: {call['name'] + ' ' + str(call.get('arguments')) if call else 'no tool'}  ({time.time() - t1:.1f}s)")
             if call:
                 args = call.get("arguments") or {}
                 if isinstance(args, str):
@@ -647,7 +755,6 @@ def main():
                     tool_reply = run_tool_call(call["name"], args, memory.get_setting("home_city"))
                     tool_route = "🌐 internet (LLM router)"
                 if tool_reply:
-                    print(f"AI:  {tool_reply}")
                     say(tool_reply, tool_route)
                     continue
 
@@ -663,10 +770,10 @@ def main():
 
         start = time.time()
         reply, confidence = think(messages)
-        print(f"🤔 Confidence: {confidence:.2f}")
+        print(f"🤔 Confidence: {confidence:.2f}  ({time.time() - start:.1f}s)")
         route_name = "📚 memory (on device)" if found else "🧠 local LLM"
 
-        # "I'm not sure" mode: low confidence on general knowledge = likely a guess
+        # "I'm not sure" mode: low confidence on factual questions = likely a guess
         declined = re.search(r"don't (know|have)|not sure|no access", reply.lower())
         is_question = re.match(
             r"(what|who|when|where|which|why|how (?:many|much|old|far|long|big)|is|are|was|were|does|did)\b",
@@ -678,7 +785,6 @@ def main():
             route_name = "🤔 not sure (guess withheld)"
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
-                # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(
             r"\b(i'll|i will|i've|i have|let me)\s+(?:make sure\b|"
             r"(?:remind|set|call|text|send|book|order|schedule|add|save|remove|note|check"
@@ -693,7 +799,6 @@ def main():
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
         history = history[:1] + history[-6:]   # keep only recent turns, stays fast
-        print(f"AI:  {reply}   ({time.time() - start:.1f}s)")
         tone = "gentle" if route_name.startswith(("🤔", "🛡️")) else "calm"
         say(reply, route_name, round(confidence, 2), tone)
 

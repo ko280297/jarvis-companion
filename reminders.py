@@ -175,6 +175,10 @@ def handle_reminder_command(text, rem):
         if not due:
             due, _ = parse_when("in " + t)          # "two minutes" on its own
         if due:
+            task = re.sub(r"\b(in|after|within)\b.*?\b(second|minute|hour)s?\b", " ", task)   # leftover time words
+            task = " ".join(task.split()).strip(" ,.")
+            for _ in range(3):
+                task = re.sub(r"^(?:to|tool|that|about|for|me)\s+", "", task)
             if is_unsafe(task):
                 return REFUSAL
             rem.add(due, task or "your reminder", "reminder")
