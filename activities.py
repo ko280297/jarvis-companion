@@ -4,13 +4,15 @@ and anything else gets a gentle reprompt instead of the LLM. All game state live
 import random
 import re
 import time
+from difflib import SequenceMatcher
 
 EXIT = re.compile(
     r"\b(?:stop|quit|exit|end|close)\b.*\b(?:game|games|quiz|playing|math)\b|\bi(?:'m| am) done playing\b")
 LIST_GAMES = re.compile(r"\b(?:what|which) games\b|\bgames? (?:can|do) you\b")
 PLAY = re.compile(r"\b(?:play|game|let'?s do|start|begin)\b")
 PLAY_AGAIN = re.compile(r"\b(?:play|go) (?:it |that )?again\b|\bone more (?:time|game|round)\b")
-STATUS = re.compile(r"\b(?:what happened to|where(?:'s| is)|back to|continue|resume) (?:the |our |my |that )?game\b"
+STATUS = re.compile(r"\b(?:what happened to|what about|where(?:'s| is)|back to|continue|resume) "
+                    r"(?:the |our |my |that )?game\b|\bthe game we were playing\b"
                     r"|\bwhat (?:was|is) the question\b|\bwhere were we\b")
 GAME_OVER_SECONDS = 20      # how long the "Game over" card stays on screen
 
@@ -63,6 +65,123 @@ class Activity:
     def screen(self):
         return {"title": self.name, "lines": []}
 
+# ---------- Game: tic-tac-toe (voice + board on screen) ----------
+class TicTacToe(Activity):
+    name = "Tic-tac-toe"
+    KEYWORDS = re.compile(r"\bti[ck]+[\s-]*ta[ck]+[\s-]*toe?\b|\bnoughts\b|\bcrosses\b")
+    LINES = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 3, 6), (1, 4, 7), (2, 5, 8), (0, 4, 8), (2, 4, 6)]
+    SPOTS = [   # checked in this order: two-word spots before plain "center"
+        (r"top left", 0), (r"top (?:center|centre|middle)", 1), (r"top right", 2),
+        (r"middle left|(?:center|centre) left", 3), (r"middle right|(?:center|centre) right", 5),
+        (r"bottom left", 6), (r"bottom (?:center|centre|middle)", 7), (r"bottom right", 8),
+        (r"center|centre|middle", 4),
+    ]
+    NAMES = ["the top left", "the top middle", "the top right", "the middle left", "the center",
+             "the middle right", "the bottom left", "the bottom middle", "the bottom right"]
+    SOUNDS_LIKE = {"one": 1, "won": 1, "two": 2, "to": 2, "too": 2, "doo": 2, "do": 2, "due": 2,
+                   "three": 3, "tree": 3, "four": 4, "for": 4, "five": 5, "fine": 5, "bye": 5, "by": 5,
+                   "buy": 5, "hive": 5, "fife": 5, "six": 6, "sex": 6, "seven": 7, "eight": 8, "ate": 8,
+                   "nine": 9, "nein": 9}
+    MISTAKES = {"easy": 0.6, "medium": 0.25, "hard": 0.0}   # how often Jarvis plays a random move
+
+    def __init__(self, level="medium"):
+        self.board = [""] * 9
+        self.level = level
+        self.win = []
+        self.status = "Your move: say a number or a spot"
+
+    def start(self):
+        return (f"Let's play tic tac toe, on {self.level}! You're X and you go first. "
+                "Say a number from 1 to 9, or a spot like top left.")
+
+    def prompt(self):
+        free = self._free_text()
+        return f"Your move. Say a number, or a spot like top left. Free spots: {free}."
+
+    def _free(self):
+        return [i for i, v in enumerate(self.board) if not v]
+
+    def _free_text(self):
+        nums = [str(i + 1) for i in self._free()]
+        return nums[0] if len(nums) == 1 else ", ".join(nums[:-1]) + " and " + nums[-1]
+
+    def _spot(self, lower):
+        """'5' / 'center' / 'top left' / 'to' (two) -> board index 0-8, or None."""
+        lower = lower.replace("upper", "top").replace("lower", "bottom")
+        lower = lower.replace("upper", "top").replace("lower", "bottom")
+        lower = re.sub(r"\bstop\b", "top", lower)     # "stop middle" is how "top middle" is often heard
+        digits = re.findall(r"\b[1-9]\b", lower)
+        if digits:
+            return int(digits[-1]) - 1
+        for pattern, index in self.SPOTS:
+            if re.search(rf"\b(?:{pattern})\b", lower):
+                return index
+        words = [self.SOUNDS_LIKE[w] for w in re.findall(r"[a-z]+", lower) if w in self.SOUNDS_LIKE]
+        return words[-1] - 1 if words else None
+
+    def _winner(self, board):
+        for a, b, c in self.LINES:
+            if board[a] and board[a] == board[b] == board[c]:
+                return board[a], [a, b, c]
+        return None, []
+
+    def _minimax(self, board, me):
+        """Best score for 'O' (Jarvis): +1 win, 0 draw, -1 loss."""
+        who, _ = self._winner(board)
+        if who:
+            return 1 if who == "O" else -1
+        free = [i for i, v in enumerate(board) if not v]
+        if not free:
+            return 0
+        scores = []
+        for i in free:
+            board[i] = "O" if me else "X"
+            scores.append(self._minimax(board, not me))
+            board[i] = ""
+        return max(scores) if me else min(scores)
+
+    def _jarvis_move(self):
+        free = self._free()
+        if random.random() < self.MISTAKES[self.level]:
+            return random.choice(free)
+        best, best_score = [], -2
+        for i in free:
+            self.board[i] = "O"
+            score = self._minimax(self.board, False)
+            self.board[i] = ""
+            if score > best_score:
+                best, best_score = [i], score
+            elif score == best_score:
+                best.append(i)
+        return random.choice(best)          # several equally good moves: keep it varied
+
+    def handle(self, lower):
+        spot = self._spot(lower)
+        if spot is None:
+            return None
+        if self.board[spot]:
+            return f"That spot is taken. Free spots: {self._free_text()}.", False
+        self.board[spot] = "X"
+        who, self.win = self._winner(self.board)
+        if who:
+            return "You win! Brilliant game. Game over.", True
+        if not self._free():
+            return "It's a draw! Well played. Game over.", True
+        mine = self._jarvis_move()
+        self.board[mine] = "O"
+        said = f"I'll take {mine + 1}, {self.NAMES[mine]}."
+        who, self.win = self._winner(self.board)
+        if who:
+            return f"{said} I win this time! Game over.", True
+        if not self._free():
+            return f"{said} It's a draw! Game over.", True
+        self.status = f"Jarvis took {mine + 1}. Your move."
+        return f"{said} Your move.", False
+
+    def screen(self):
+        return {"title": f"⭕ Tic-tac-toe ({self.level})",
+                "lines": ["You: X · Jarvis: O", self.status],
+                "board": list(self.board), "win": list(self.win)}
 
 # ---------- Game: memory sequence ----------
 class MemorySequence(Activity):
@@ -240,10 +359,34 @@ class NumberGuess(Activity):
 
 
 # ---------- Manager ----------
-GAMES = [MemorySequence, MentalMath, NumberGuess]     # checked in this order; new games go here
+GAMES = [TicTacToe, MemorySequence, MentalMath, NumberGuess]     # checked in this order; new games go here
 _current = None
 _last_game = None      # so "play again" restarts the same game
+_choosing = False      # just listed the games: "the first one" / "second" picks one
+ORDINALS = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1,
+            "third": 2, "3rd": 2, "three": 2, "fourth": 3, "4th": 3, "four": 3, "last": -1}
 
+
+def _fuzzy_game(lower):
+    """'tic tatto' / 'tic tac tok' -> TicTacToe: the game whose name sounds closest (speech-to-text slips)."""
+    words = re.findall(r"[a-z]+", lower)
+    best, best_game = 0.0, None
+    for game in GAMES:
+        target = re.sub(r"[^a-z]", "", game.name.lower())
+        for size in (1, 2, 3):
+            for i in range(len(words) - size + 1):
+                ratio = SequenceMatcher(None, "".join(words[i:i + size]), target).ratio()
+                if ratio > best:
+                    best, best_game = ratio, game
+    return best_game if best >= 0.7 else None
+
+
+def _pick(lower):
+    """Which game did they mean? Keywords first, then a close-sounding name."""
+    for game in GAMES:
+        if game.KEYWORDS.search(lower):
+            return game
+    return _fuzzy_game(lower)
 
 def _names():
     return ", ".join(g.name for g in GAMES[:-1]) + ", and " + GAMES[-1].name
@@ -256,10 +399,12 @@ def _show(game):
     return seq
 
 
-def _start(game):
-    """Start a new game and remember it for 'play again'."""
+def _start(game, lower=""):
+    """Start a new game (with a level if the game has one) and remember it for 'play again'."""
     global _current, _last_game
-    _current, _last_game = game(), game
+    level = re.search(r"\b(easy|medium|hard)\b", lower)
+    _current = game(level.group(1)) if (level and game is TicTacToe) else game()
+    _last_game = game
     reply = _current.start()
     return {"say": reply, "screen": _current.screen(), "show": _show(_current)}
 
@@ -282,7 +427,7 @@ def game_reprompt():
 
 def handle_activity(text):
     """Returns {say, screen, show} if a game handled this, otherwise None."""
-    global _current
+    global _current, _choosing
     lower = text.lower().strip(" .!?,")
 
     if _current:
@@ -297,7 +442,7 @@ def handle_activity(text):
             return None                              # maybe a real command: main.py decides, then reprompts
         reply, finished = result
         if finished:                                 # keep a "Game over" card on screen for a little while
-            screen = {"title": f"🏁 Game over · {_current.name}", "lines": [reply],
+            screen = {**_current.screen(), "title": f"🏁 Game over · {_current.name}", "lines": [reply],
                       "expires": time.time() + GAME_OVER_SECONDS}
         else:
             screen = _current.screen()
@@ -310,14 +455,26 @@ def handle_activity(text):
         return {"say": f"We're not playing a game right now. I can play {_names()}.", "screen": None}
 
     if LIST_GAMES.search(lower):
+        _choosing = True
         return {"say": f"I can play {_names()}. Just say, let's play, and the name!", "screen": None}
 
     if _last_game and PLAY_AGAIN.search(lower):
-        return _start(_last_game)
+        return _start(_last_game, lower)
 
-    if PLAY.search(lower):                           # "let's play ..." -> pick the game by its keywords
-        for game in GAMES:
-            if game.KEYWORDS.search(lower):
-                return _start(game)
-        return {"say": f"I can play {_names()}. Which one would you like?", "screen": None}
+    if _choosing:                                    # right after the list: "the first one", "second", a name
+        _choosing = False
+        for word, index in ORDINALS.items():
+            if re.search(rf"\b{word}\b", lower):
+                return _start(GAMES[index], lower)
+        game = _pick(lower)
+        if game:
+            return _start(game, lower)
+
+    if PLAY.search(lower):                           # "let's play ..." -> keywords, then a close-sounding name
+        game = _pick(lower)
+        if game:
+            return _start(game, lower)
+        _choosing = True
+        return {"say": f"I can play {_names()}. Which one would you like? You can say the first one, "
+                       "the second one, and so on.", "screen": None}
     return None

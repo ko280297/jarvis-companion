@@ -87,7 +87,7 @@ SYSTEM_PROMPT = (
     "You cannot see or change the user's lists. Never say you added, removed, or saved anything. "
     "Only your user talks to you, unless memories say otherwise. "
     "Never guess anyone's name: if a person's name is not in the saved memories, say you don't know it."
-    " Never give medical advice or suggest treatments: kindly suggest seeing a doctor instead."
+    " Only if the user asks about health, symptoms or treatment: give no medical advice, kindly suggest a doctor."
     " Always call the user by the name given in the system message, never by any other name."
 )
 
@@ -413,6 +413,7 @@ def transcribe(stt, audio, memory):
         if value:
             words.add(value)
     words.update(set(memory.list_names()) | set(STARTER_LISTS))   # the user's own list names
+    words.update({ASSISTANT_NAME, "Tic-tac-toe", "Memory sequence", "Mental math"})   # app words
     hint = ", ".join(sorted(words))
     segments = stt.transcribe(audio, initial_prompt=hint)
     return " ".join(s.text.strip() for s in segments).strip()
@@ -883,10 +884,10 @@ def main():
             continue
         
         short_by = len(text.split()) <= 3 and re.match(r"by\b", text.lower())
-        if END_CONVERSATION.search(text.lower()) or short_by:
+        one_word = len(text.split()) <= 1
+        if (END_CONVERSATION.search(text.lower()) or short_by) and not (is_active() and one_word):
                     say("Okay, talk soon!", "👋 conversation ended", tone="bright")
                     _guest = None
-                    end_activity()
                     follow_up, chime_next = False, False
                     continue
                 
