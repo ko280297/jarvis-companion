@@ -1,12 +1,13 @@
 import json
 import math
+import random
 import re
 import threading
 import time
+
 from collections import deque
 from datetime import date, datetime
 from difflib import SequenceMatcher
-from emergency import handle_emergency
 
 import numpy as np
 import requests
@@ -25,6 +26,7 @@ from reminders import Reminders, handle_reminder_command
 from summary import SUMMARY_Q, build_summary
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
+from wellbeing import handle_wellbeing, clear_journal, clear_session, vent_mode, vent_silence
 
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
@@ -54,7 +56,8 @@ INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on th
          "so everything you tell me stays with you.")
 CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
                 "set reminders and timers, give you a summary of your day, tell you the date and time, "
-                "check the weather or news, and help you with the right numbers in an emergency. "
+                "check the weather or news, guide you through calming exercises when you need a moment, "
+                "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
     r"\b(bye|goodbye|good night|that's all|thats all|that is all|nothing else|stop listening"
@@ -80,7 +83,10 @@ SYSTEM_PROMPT = (
     "You cannot see or change the user's lists. Never say you added, removed, or saved anything. "
     "Only your user talks to you, unless memories say otherwise. "
     "Never guess anyone's name: if a person's name is not in the saved memories, say you don't know it."
+    " Never give medical advice or suggest treatments: kindly suggest seeing a doctor instead."
+    " Always call the user by the name given in the system message, never by any other name."
 )
+
 
 TOOLS = [
     {"type": "function", "function": {
@@ -129,7 +135,18 @@ INTENT_EXAMPLES = [
 _greeting = ""         # e.g. "Nice to meet you, Krati!" to put in front of the next reply
 _pending_name = None   # waiting for "yes/no": should I really change the user's name?
 _expect_city = False   # just set or asked about the city -> "No, it's Pune" / "P-U-N-E" corrects it
+_guest = None          # (name, since) while a friend is talking: RAM only
+GUEST_MINUTES = 10
 
+WHO_TALKING = re.compile(
+    r"\bwho (?:are you|am i) (?:talking|speaking|interacting|chatting) (?:to|with)\b"
+    r"|\bwho are you (?:interacting|talking|chatting) with\b|\bwho(?:'s| is) (?:talking|speaking) (?:to you|now)\b")
+PRIVATE_Q = re.compile(
+    r"\b(?:my day|summary|remember|memories|memory|saved|lists?|grocery|groceries|schedule|reminders?"
+    r"|emergency contacts?|friends?|sister|brother|journal)\b")
+MORE_SUMMARY = re.compile(
+    r"\b(?:daily|day'?s|today'?s|entire|full|whole) summary\b|\bsummary of (?:my|the) (?:day|tasks?)\b")
+BULLET = re.compile(r"^\s*(?:[*\-•]|\d+[.)])\s+")
 
 # ---------- Output ----------
 def say(text, route, confidence=None, tone="calm"):
@@ -141,7 +158,115 @@ def say(text, route, confidence=None, tone="calm"):
     dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence)
     speak(text, tone)
 
+EMPATHY_PROMPT = (
+    f"You are {ASSISTANT_NAME}, a warm, caring companion. The user just told you how they feel. "
+    "Reply with ONE short, kind sentence that shows you understood what they said, in your own words. "
+    "Do not give advice, do not suggest anything, do not ask a question, and do not use any names.")
+EMPATHY_BLOCK = re.compile(
+    r"\b(?:should|try|doctor|therap\w*|medic\w*|pill|tablet|diagnos\w*|you need|you must|harm|kill|die"
+    r"|suicid\w*|as an ai|language model|i can'?t|i cannot)\b")
 
+
+def empathy_line(user_text, earlier=()):
+    """One warm sentence from the LLM, checked. Returns None if it fails any check (then the file's line is used).
+    'earlier' = what the user shared about their feelings earlier in this session (RAM only)."""
+    messages = [{"role": "system", "content": EMPATHY_PROMPT}]
+    if earlier:
+        shared = "\n".join(f"- {t}" for t in earlier)
+        messages.append({"role": "system", "content":
+                         f"Earlier in this conversation the user said:\n{shared}\n"
+                         "Use this only to show you remember. Do not repeat it word for word."})
+    messages.append({"role": "user", "content": user_text})
+    try:
+        r = requests.post(OLLAMA_URL, json={
+            "model": LLM_MODEL, "stream": False, "keep_alive": "30m", "messages": messages,
+            "options": {"temperature": 0.3, "num_predict": 40, "num_ctx": NUM_CTX},
+        }, timeout=15)
+        r.raise_for_status()
+        line = (r.json()["message"].get("content") or "").strip()
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+    line = re.split(r"(?<=[.!])\s", line)[0].strip()          # first sentence only
+    if not line or len(line.split()) > 25 or "?" in line or EMPATHY_BLOCK.search(line.lower()):
+        print(f"   (empathy line rejected: {line})")
+        return None
+    return line
+
+_last_ack = None
+
+
+def split_items(text):
+    """'a window, a door and the fan' -> ['window', 'door', 'fan'] (for counting in grounding)."""
+    items = []
+    for part in re.split(r",|;|\.|\band\b|\s(?:a|an|the|my)\s", f" {text.lower()} "):
+        part = re.sub(r"^\s*(?:i can (?:see|hear|feel|smell|taste)|there'?s|there is)\s+", "", part.strip())
+        part = re.sub(r"^(?:a|an|the|my|some)\s+", "", part).strip(" !?")
+        if len(part) > 1 and part not in ("um", "uh", "okay", "ok", "so", "like") and part not in items:
+            items.append(part)
+    return items
+
+
+def run_plan(plan, hear=None):
+    """Carry out a wellbeing plan: things to say, timed breathing cues, listening steps and screen updates.
+    hear(seconds) -> what the user said ('' if nothing, None if an emergency took over)."""
+    global _last_ack
+    for step in plan:
+        kind = step[0]
+        if kind == "say":
+            say(step[1], "🌿 wellbeing (on device)", tone=step[2])
+        elif kind == "empathy":                            # one warm LLM sentence, checked, with a fallback
+            _, user_text, fallback, lead, earlier = step
+            line = empathy_line(user_text, earlier)
+            if line:
+                say(f"{line} {lead}".strip(), "🌿 wellbeing (warm line by local LLM, checked)", tone="gentle")
+            else:
+                say(fallback, "🌿 wellbeing (on device)", tone="gentle")
+        elif kind == "cue":                                # one breathing step, with timing
+            _, cue, phase, secs, name = step
+            dashboard.update(activity={"title": f"🌿 {name}", "lines": [cue],
+                                       "breath": {"phase": phase, "seconds": secs, "id": time.time()}})
+            started = time.time()
+            speak(cue, "gentle")
+            time.sleep(max(0, secs - (time.time() - started)))
+        elif kind == "ask":                                # listen and count: shown on screen, never saved
+            _, secs, name, line, acks, count = step
+            items, tries = [], 0
+            while tries < 3:
+                heard = hear(secs) if hear else ""
+                if heard is None:                          # an emergency came up: stop the exercise
+                    return
+                if not heard:
+                    break
+                tries += 1
+                if not count:                              # nothing to count: just show what was said
+                    items = [heard]
+                    break
+                items += [i for i in split_items(heard) if i not in items]
+                items = items[:count]                      # named 7 of 5? only the first 5 count
+                print(f"   (counted {len(items)} of {count}: {', '.join(items)})")
+                dashboard.update(activity={"title": f"🌿 {name}",
+                                           "lines": [line] + [f"{n}. {i}" for n, i in enumerate(items, 1)]})
+                if len(items) >= count:
+                    break
+                if tries < 3:
+                    time.sleep(0.8)
+                    say(f"That's {len(items)}. Can you find {count - len(items)} more?",
+                        "🌿 wellbeing (on device)", tone="gentle")
+            if items:
+                time.sleep(1.0)                            # let the moment settle before speaking
+                if count and len(items) < count:
+                    ack = "That's okay, that's enough."
+                else:
+                    _last_ack = random.choice([a for a in acks if a != _last_ack] or acks)
+                    ack = _last_ack
+                say(ack, "🌿 wellbeing (on device)", tone="gentle")
+                time.sleep(1.5)                            # a breath before the next step
+        elif kind == "wait":
+            time.sleep(step[1])
+        elif kind == "screen":
+            dashboard.update(activity=step[1])
+        elif kind == "silent":                             # thought dump: just keep listening
+            pass      
 # ---------- Listening ----------
 _threshold = 300.0    # speech loudness threshold, learned from the room while waiting for the wake word
 
@@ -171,7 +296,8 @@ def rms(frame):
     return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
 
 
-def listen(wake, reminders, follow_up=False):
+def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
+           silence=SILENCE_TO_STOP, timeout=FOLLOW_UP_SECONDS):
     """Wake-word mode: wait for 'Hey Jarvis', then record (and keep an eye on due reminders).
     Follow-up mode: skip the wake word and just listen briefly for a reply.
     Returns the audio, REMINDER_DUE if a reminder needs announcing, or None if nobody spoke."""
@@ -182,7 +308,7 @@ def listen(wake, reminders, follow_up=False):
                         dtype="int16", blocksize=CHUNK) as stream:
         if follow_up:
             print("\n💬 Still listening, no wake word needed...")
-            no_speech_timeout = FOLLOW_UP_SECONDS
+            no_speech_timeout = timeout
         else:
             wake.reset()
             noise = deque(maxlen=50)    # background loudness over the last ~4 seconds
@@ -208,7 +334,7 @@ def listen(wake, reminders, follow_up=False):
 
         dashboard.update(status="listening")
         frames, heard_speech, quiet = [], False, 0.0
-        for _ in range(int(MAX_RECORD_SECONDS / chunk_sec)):
+        for _ in range(int(max_seconds / chunk_sec)):
             frame, _ = stream.read(CHUNK)
             frame = frame.flatten()
             frames.append(frame)
@@ -216,7 +342,7 @@ def listen(wake, reminders, follow_up=False):
                 heard_speech, quiet = True, 0.0
             else:
                 quiet += chunk_sec
-            if heard_speech and quiet >= SILENCE_TO_STOP:
+            if heard_speech and quiet >= silence:
                 break
             if not heard_speech and len(frames) * chunk_sec >= no_speech_timeout:
                 break
@@ -311,12 +437,16 @@ def route(text, tools):
 
 
 def context_message(memory):
-    """Small, safe context: the user's name and the part of the day (not the exact time)."""
+    """Small, safe context: who is talking and the part of the day (not the exact time)."""
     hour = time.localtime().tm_hour
     part = ("night" if hour < 5 or hour >= 22 else "morning" if hour < 12
             else "afternoon" if hour < 17 else "evening")
     name = memory.get_setting("user_name")
-    who = f"The user's name is {name}. Use it now and then, not in every reply. " if name else ""
+    if _guest:
+        who = (f"You are talking to {_guest[0]}, a guest of {name}. Call them {_guest[0]}. "
+               f"Never share anything about {name}'s life. ")
+    else:
+        who = f"The user's name is {name}. Use it now and then, not in every reply. " if name else ""
     return {"role": "system", "content": f"{who}It is currently {part}."}
 
 
@@ -400,6 +530,30 @@ def take_introduction(text):
         return m.group(2).strip(), m.group(1).title()
     return text, None
 
+def detect_guest(lower, user):
+    """'I'm Krati's friend Shubhangi' / 'you're talking to my friend Shubhangi' -> 'Shubhangi'."""
+    owner = re.escape(user.lower()) if user else r"\w+"
+    patterns = [
+        rf"\b(?:i(?:'m| am)|this is) {owner}'?s {RELATIONS}[, ]+(\w+)",
+        rf"\byou(?:'re| are) (?:talking|speaking|interacting|chatting) (?:to|with) (?:{owner}'?s |my )?{RELATIONS}[, ]+(\w+)",
+        rf"\bmy {RELATIONS}[, ]+(\w+) is (?:talking|speaking|here)\b",
+    ]
+    for p in patterns:
+        m = re.search(p, lower)
+        if m:
+            return m.group(2).title()
+    return None
+
+
+def for_speech(text):
+    """LLM replies are spoken: turn bullet lists into one sentence and drop markdown symbols."""
+    lines = [l for l in text.splitlines() if l.strip()]
+    bullets = [BULLET.sub("", l).strip() for l in lines if BULLET.match(l)]
+    others = [l.strip() for l in lines if not BULLET.match(l)]
+    if bullets:
+        text = " ".join(others[:1] + [", ".join(bullets) + "."] + others[1:])
+    text = re.sub(r"[*_#`]", "", text)
+    return " ".join(text.split())
 
 SPELLED = re.compile(r"\b[a-z](?:[\s\-.,]+[a-z]\b){2,}")
 
@@ -500,7 +654,8 @@ def handle_command(text, memory, history, reminders):
         return True
 
     # ----- About Jarvis -----
-    if re.match(r"(who are you|what(?:'s| is) your name|introduce yourself)", lower):
+    if re.match(r"(?:who are you|what(?:'s| is) your name|introduce yourself)\b"
+                r"(?!\s+(?:talking|speaking|interacting|chatting))", lower):    
         say(INTRO, f"🙂 about {ASSISTANT_NAME}", tone="bright")
         return True
 
@@ -558,6 +713,8 @@ def handle_command(text, memory, history, reminders):
     if lower.startswith(("forget everything", "delete everything", "erase everything")):
         count = memory.forget_all()
         reminders.clear_all()
+        clear_journal()
+        clear_session()
         del history[1:]
         print(f"🧹 Erased {count} memories and list items, and all reminders")
         say("Done. I've erased everything I had saved.", "🧹 everything erased")
@@ -589,7 +746,7 @@ def handle_command(text, memory, history, reminders):
 
 # ---------- Main loop ----------
 def main():
-    global _greeting, _pending_name
+    global _greeting, _pending_name, _guest
     dashboard.start()
     t0 = time.time()
 
@@ -616,6 +773,19 @@ def main():
     follow_up = False
     follow_count = 0
     chime_next = False
+    def hear(seconds):
+        """Listen for a short answer during an exercise. '' = nothing heard, None = an emergency took over."""
+        audio = listen(wake, reminders, True, max_seconds=seconds + 10, silence=3.0, timeout=seconds)
+        if audio is None or isinstance(audio, str):
+            return ""
+        heard = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", "", transcribe(stt, audio, memory)).strip()
+        print(f"You: {heard}")
+        help_ = handle_emergency(heard, memory) if heard else None
+        if help_:
+            dashboard.update(emergency=help_["banner"], activity=None)
+            say(help_["say"], "🚨 emergency help (offline)", tone=help_["tone"])
+            return None
+        return heard
     print(f"Ready! ({time.time() - t0:.1f}s)")
 
     while True:
@@ -629,12 +799,20 @@ def main():
             chime_next = False
         dashboard.update(memories=len(memory.all()))
 
-        audio = listen(wake, reminders, follow_up)
+        venting = vent_mode()
+        audio = listen(wake, reminders, follow_up or venting,
+                       max_seconds=60 if venting else MAX_RECORD_SECONDS,
+                       silence=4.0 if venting else SILENCE_TO_STOP,
+                       timeout=45 if venting else FOLLOW_UP_SECONDS)
         if isinstance(audio, str):       # a reminder or timer is due
             announce_due(reminders)
             follow_up = True             # so the user can reply ("thanks!") without the wake word
             continue
         if audio is None:
+            if venting:                                    # quiet during a thought dump: check in gently
+                run_plan(vent_silence() or [], hear)
+                follow_up = vent_mode()
+                continue
             if follow_up:
                 print("   (quiet, so the conversation ended)")
             follow_up = False
@@ -642,7 +820,7 @@ def main():
 
         dashboard.update(status="thinking")
         text = transcribe(stt, audio, memory)
-        text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", text).strip()     # drop [BLANK_AUDIO], (music) anywhere
+        text = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", "", text).strip()   # drop [BLANK_AUDIO], (music), *cough*  
         text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
@@ -669,6 +847,16 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False    # stay with the user
             continue
 
+        # during a thought dump: did the recording end because they paused (not because 60 s ran out)?
+        paused = not venting or len(audio) < (60 - 1) * SAMPLE_RATE
+        plan = handle_wellbeing(text, memory, paused=paused)
+        if plan:
+            dashboard.update(last_heard="(private)")
+            run_plan(plan, hear)
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+
+
         if addressed:
             follow_count = 0                    # saying "Jarvis" keeps the conversation going
         else:
@@ -679,15 +867,40 @@ def main():
         short_by = len(text.split()) <= 3 and text.lower().startswith("by ")
         if END_CONVERSATION.search(text.lower()) or short_by:
             say("Okay, talk soon!", "👋 conversation ended", tone="bright")
+            _guest = None
             follow_up, chime_next = False, False
             continue
 
         if START_OVER.search(text.lower()):
             del history[1:]
             _pending_name = None
+            clear_session()
             say("Okay, fresh start! What would you like to talk about?", "🔄 conversation reset", tone="bright")
             continue
 
+        # Who is talking right now? (RAM only; ends after 10 minutes, on "bye", or when the user comes back)
+        if _guest and time.time() - _guest[1] > GUEST_MINUTES * 60:
+            _guest = None
+        user = memory.get_setting("user_name")
+        guest_name = detect_guest(text.lower(), user)
+        if guest_name and (not user or guest_name.lower() != user.lower()):
+            _guest = (guest_name, time.time())
+            del history[1:]
+            say(f"Hi {guest_name}, nice to meet you! I'll keep {user}'s personal things private while we talk.",
+                "👥 guest mode (on device)", tone="bright")
+            continue
+        if WHO_TALKING.search(text.lower()):
+            if _guest:
+                say(f"I'm talking to {_guest[0]}, {user}'s guest.", "👥 who's talking (on device)")
+            else:
+                say(f"I'm talking to you, {user}." if user else "I don't know your name yet. You can say, my name is...",
+                    "👥 who's talking (on device)")
+            continue
+        if _guest and PRIVATE_Q.search(text.lower()):
+            say(f"That's {user}'s private information, so I'll keep it for them. Is there anything else I can help with?",
+                "🔒 guest mode: kept private", tone="gentle")
+            continue
+        
         # Waiting for yes/no on a name change?
         if _pending_name:
             name, _pending_name = _pending_name, None
@@ -699,6 +912,7 @@ def main():
             if re.match(r"(no|nope|don't|do not)\b", text.lower()):
                 user = memory.get_setting("user_name")
                 memory.add(f"{name} is a friend of {user} (saved on {date.today():%A, %d %B %Y})")
+                _guest = (name, time.time())
                 print(f"🙂 Guest remembered: {name}")
                 say(f"Got it, {name}! {user} is still my main user, and I'll remember you're {user}'s friend.",
                     "⚙️ guest remembered", tone="bright")
@@ -715,21 +929,32 @@ def main():
         text, new_name = take_introduction(text)
         if new_name:
             current = memory.get_setting("user_name")
-            if current and current.lower() != new_name.lower():
-                # someone else may be talking (a friend) -> ask before changing anything
+            if current and current.lower() == new_name.lower():
+                # same name as saved: the main user is (back) here
+                was_guest = _guest is not None
+                _guest = None
+                del history[1:]
+                if not text:
+                    msg = f"Welcome back, {current}!" if was_guest else f"Of course, {current}! Sorry about that."
+                    say(msg, "⚙️ name (on device)", tone="bright" if was_guest else "gentle")
+                    continue
+            elif current:
+                # a different name: someone else may be talking (a friend) -> ask first
                 _pending_name = new_name
                 say(f"Nice to meet you, {new_name}! Should I call you {new_name} from now on, instead of {current}?",
                     "⚙️ name change? (asking)", tone="bright")
                 continue
-            memory.set_setting("user_name", new_name)
-            print(f"🙂 User name set: {new_name}")
-            _greeting = f"Nice to meet you, {new_name}!"
-            if not text:
-                say("", "⚙️ name saved on device", tone="bright")
-                continue
+            else:
+                # first time we hear a name
+                memory.set_setting("user_name", new_name)
+                print(f"🙂 User name set: {new_name}")
+                _greeting = f"Nice to meet you, {new_name}!"
+                if not text:
+                    say("", "⚙️ name saved on device", tone="bright")
+                    continue       
 
         # 0. Daily summary (Python only, plus weather)
-        if SUMMARY_Q.search(text.lower()):
+        if SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower()):
             summary = build_summary(memory, reminders, weather=lambda: summary_weather(memory))
             say(summary, "☀️ daily summary (on device + weather)", tone="bright")
             continue
@@ -751,7 +976,7 @@ def main():
             continue
 
         # 4. Gate -> LLM router -> validated tool (lists or internet)
-        found = memory.search(text)
+        found = [] if _guest else memory.search(text) 
         score, category = gate(text, example_vecs)
         print(f"🚦 Gate: {score:.2f} ({category})")
         wants_lists = category == "lists" and score >= GATE_THRESHOLD
@@ -789,6 +1014,12 @@ def main():
 
         start = time.time()
         reply, confidence = think(messages)
+        reply = for_speech(reply)
+        recent = [m["content"] for m in history if m["role"] == "assistant"][-2:]
+        if reply in recent:                                 # stuck in a loop: start the chat fresh
+            print(f"   (repeated reply, resetting chat: {reply})")
+            del history[1:]
+            reply = "Sorry, I think I'm going in circles. Could you say that in a different way?"
         print(f"🤔 Confidence: {confidence:.2f}  ({time.time() - start:.1f}s)")
         route_name = "📚 memory (on device)" if found else "🧠 local LLM"
 
@@ -807,7 +1038,7 @@ def main():
         promise = re.search(
             r"\b(i'll|i will|i've|i have|let me)\s+(?:make sure\b|"
             r"(?:remind|set|call|text|send|book|order|schedule|add|save|remove|note|check"
-            r"|clear|delete|cancel|change|update))"
+            r"|clear|delete|cancel|change|update|adjust|fix))"
             r"|\b(added|removed|saved|scheduled|noted)\b",
             reply.lower())
         if promise and not declined:

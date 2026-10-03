@@ -174,6 +174,82 @@
         opacity: 0.8;
         margin-top: 8px;
       }
+      .act {
+        display: none;
+        border-color: #1f6f5c;
+        margin: 18px 0;
+        text-align: center;
+      }
+      .act-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .act-line {
+        font-size: 24px;
+        padding: 2px 0;
+      }
+      .breath {
+        display: none;
+        width: 170px;
+        height: 170px;
+        margin: 18px auto 6px;
+        border-radius: 50%;
+        background: radial-gradient(circle, #a8e6d5, #1f6f5c);
+        transform: scale(0.55);
+        transition: transform 4s ease-in-out;
+      }
+      .hug {
+        display: none;
+        justify-content: center;
+        margin: 10px auto 0;
+      }
+      .hug svg {
+        width: 240px;
+        height: 190px;
+      }
+      .side {
+        transform-box: view-box;
+        transform-origin: 100px 85px; /* wings fold in towards the body */
+        animation: flap 2.4s ease-in-out infinite;
+      }
+      .side.right {
+        animation-delay: -1.2s; /* right side taps half a beat after the left */
+      }
+      @keyframes flap {
+        0%,
+        50%,
+        100% {
+          transform: scaleX(1);
+          filter: brightness(1);
+        }
+        25% {
+          transform: scaleX(0.55);
+          filter: brightness(1.35);
+        }
+      }
+      .hug-caption {
+        display: none;
+        font-size: 22px;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+      .hug-caption span {
+        animation: glow 2.4s ease-in-out infinite;
+      }
+      .hug-caption .tap-r {
+        animation-delay: -1.2s;
+      }
+      @keyframes glow {
+        0%,
+        50%,
+        100% {
+          color: var(--muted);
+        }
+        25% {
+          color: #f7c6e0;
+        }
+      }
     </style>
   </head>
   <body>
@@ -185,6 +261,69 @@
     <div id="sos" class="sos">
       <div class="sos-title" id="sos-title"></div>
       <div id="sos-lines"></div>
+    </div>
+    <div id="act" class="card act">
+      <div class="act-title" id="act-title"></div>
+      <div id="act-lines"></div>
+      <div id="breath" class="breath"></div>
+      <div id="hug" class="hug">
+        <svg
+          viewBox="0 0 200 160"
+          aria-label="Butterfly tapping left and right"
+        >
+          <defs>
+            <linearGradient id="upperWing" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#f7c6e0" />
+              <stop offset="100%" stop-color="#a78bfa" />
+            </linearGradient>
+            <linearGradient id="lowerWing" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#c4b5fd" />
+              <stop offset="100%" stop-color="#7c5cc4" />
+            </linearGradient>
+            <g id="wings">
+              <path
+                d="M100 72 C 72 20, 22 8, 14 42 C 8 72, 58 86, 100 80 Z"
+                fill="url(#upperWing)"
+              />
+              <path
+                d="M100 84 C 66 86, 34 108, 48 134 C 62 152, 92 122, 100 92 Z"
+                fill="url(#lowerWing)"
+              />
+              <circle cx="45" cy="45" r="9" fill="#fff" opacity="0.45" />
+              <circle cx="66" cy="62" r="5" fill="#fff" opacity="0.35" />
+              <circle cx="64" cy="118" r="6" fill="#fff" opacity="0.35" />
+            </g>
+          </defs>
+          <g class="side left"><use href="#wings" /></g>
+          <g class="side right">
+            <g transform="translate(200 0) scale(-1 1)">
+              <use href="#wings" />
+            </g>
+          </g>
+          <!-- body, head and antennae stay still -->
+          <ellipse cx="100" cy="88" rx="5" ry="34" fill="#5b3f8c" />
+          <circle cx="100" cy="51" r="7" fill="#5b3f8c" />
+          <path
+            d="M97 46 Q 88 26 78 20"
+            stroke="#5b3f8c"
+            stroke-width="2.5"
+            fill="none"
+            stroke-linecap="round"
+          />
+          <path
+            d="M103 46 Q 112 26 122 20"
+            stroke="#5b3f8c"
+            stroke-width="2.5"
+            fill="none"
+            stroke-linecap="round"
+          />
+          <circle cx="78" cy="20" r="3.5" fill="#5b3f8c" />
+          <circle cx="122" cy="20" r="3.5" fill="#5b3f8c" />
+        </svg>
+      </div>
+      <div id="hug-caption" class="hug-caption">
+        <span class="tap-l">left</span> · <span class="tap-r">right</span>
+      </div>
     </div>
     <div class="grid">
       <div class="card">
@@ -260,6 +399,7 @@
         );
       const $ = (id) => document.getElementById(id);
 
+      let lastBreath = null;
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();
@@ -291,7 +431,25 @@
                 .join("") +
               (e.note ? `<div class="sos-note">${esc(e.note)}</div>` : "");
           }
-
+          const a = s.activity;
+          $("act").style.display = a ? "block" : "none";
+          if (a) {
+            $("act-title").textContent = a.title;
+            $("act-lines").innerHTML = (a.lines || [])
+              .map((l) => `<div class="act-line">${esc(l)}</div>`)
+              .join("");
+          }
+          const b = a && a.breath;
+          $("breath").style.display = b ? "block" : "none";
+          if (b && b.id !== lastBreath) {
+            lastBreath = b.id;
+            $("breath").style.transitionDuration = b.seconds + "s";
+            if (b.phase === "in") $("breath").style.transform = "scale(1)";
+            if (b.phase === "out") $("breath").style.transform = "scale(0.55)";
+          }
+          const hug = a && a.anim === "butterfly";
+          $("hug").style.display = hug ? "flex" : "none";
+          $("hug-caption").style.display = hug ? "block" : "none";
           $("heard").textContent = s.last_heard || "—";
           $("reply").textContent = s.last_reply || "—";
           $("route").textContent = s.route || "—";

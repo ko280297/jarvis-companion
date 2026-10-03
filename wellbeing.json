@@ -1,0 +1,262 @@
+{
+  "exercises": {
+    "sigh": {
+      "name": "Physiological sigh",
+      "kind": "breath",
+      "rounds": 3,
+      "short": "Two breaths in · one long breath out",
+      "intro": "We'll do a physiological sigh, three times. Two breaths in through your nose, then one long breath out.",
+      "steps": [
+        ["in", 2, "Breathe in through your nose"],
+        ["in", 1, "and a little more"],
+        ["out", 6, "Now slowly out through your mouth"]
+      ],
+      "source": "Cyclic sighing: Balban et al., Cell Reports Medicine (2023)"
+    },
+    "breath_446": {
+      "name": "Slow breathing 4-4-6",
+      "kind": "breath",
+      "rounds": 3,
+      "short": "In 4 · Hold 4 · Out 6",
+      "intro": "Let's breathe in for 4, hold for 4, and breathe out slowly for 6. I'll count with you.",
+      "steps": [
+        ["in", 4, "Breathe in"],
+        ["hold", 4, "Now hold"],
+        ["out", 6, "Breathe out slowly"]
+      ],
+      "source": "Slow breathing with a longer exhale: Zaccaro et al., Frontiers in Human Neuroscience (2018)"
+    },
+    "box": {
+      "name": "Box breathing",
+      "kind": "breath",
+      "rounds": 3,
+      "short": "In 4 · Hold 4 · Out 4 · Hold 4",
+      "intro": "Let's do box breathing. In for 4, hold for 4, out for 4, and hold for 4.",
+      "steps": [
+        ["in", 4, "Breathe in"],
+        ["hold", 4, "Now hold"],
+        ["out", 4, "Breathe out"],
+        ["hold", 4, "Now hold"]
+      ],
+      "source": "Box breathing, widely taught for stress control"
+    },
+    "breath_478": {
+      "name": "4-7-8 breathing",
+      "kind": "breath",
+      "rounds": 4,
+      "short": "In 4 · Hold 7 · Out 8",
+      "intro": "Let's do 4 7 8 breathing. In through your nose for 4, hold for 7, and out through your mouth for 8.",
+      "steps": [
+        ["in", 4, "Breathe in"],
+        ["hold", 7, "Now hold"],
+        ["out", 8, "Breathe out slowly"]
+      ],
+      "source": "4-7-8 breathing, popularised by Dr Andrew Weil"
+    },
+    "energize_644": {
+      "name": "Energising breath 6-4-4",
+      "kind": "breath",
+      "rounds": 3,
+      "short": "In 6 · Hold 4 · Out 4",
+      "intro": "Let's do a gentle energising breath. In for 6, hold for 4, out for 4.",
+      "caution": "Breathe normally and stop if you feel light-headed.",
+      "steps": [
+        ["in", 6, "Breathe in, slow and deep"],
+        ["hold", 4, "Now hold"],
+        ["out", 4, "Breathe out"]
+      ],
+      "source": "Inhale-emphasised breathing as a gentle energiser (evidence is more limited than for slow-exhale breathing)"
+    },
+    "grounding": {
+      "name": "5-4-3-2-1 grounding",
+      "kind": "guided",
+      "interactive": true,
+      "short": "5 see · 4 feel · 3 hear · 2 smell · 1 taste",
+      "intro": "Let's ground ourselves with 5 4 3 2 1. Take your time with each one.",
+      "steps": [
+        ["Look around and name 5 things you can see.", 15, 5],
+        [
+          "Now notice 4 things you can feel, like your feet on the floor.",
+          12,
+          4
+        ],
+        ["Listen for 3 things you can hear.", 12, 3],
+        ["Notice 2 things you can smell.", 10, 2],
+        ["And 1 thing you can taste.", 8, 1]
+      ],
+      "source": "5-4-3-2-1 grounding, a common CBT and DBT technique"
+    },
+    "butterfly_hug": {
+      "name": "Butterfly hug",
+      "kind": "guided",
+      "anim": "butterfly",
+      "short": "Cross your arms · tap left, right, slowly",
+      "intro": "Let's try a butterfly hug.",
+      "steps": [
+        [
+          "Cross your arms over your chest, so your hands rest near your shoulders.",
+          5
+        ],
+        [
+          "Now gently tap. Left. Right. Left. Right. Slowly, like a heartbeat. Keep breathing slowly.",
+          45
+        ],
+        ["You can stop whenever you like.", 3]
+      ],
+      "source": "Butterfly hug, a self-soothing method from EMDR therapy (Artigas and Jarero)"
+    },
+    "move": {
+      "name": "Gentle wake-up",
+      "kind": "guided",
+      "short": "Stretch · roll shoulders · notice",
+      "intro": "Let's wake your body up gently.",
+      "steps": [
+        ["Stand up, if you can, and stretch your arms up high.", 8],
+        ["Roll your shoulders back, slowly, a few times.", 8],
+        [
+          "Hold something warm, or wash your hands, and notice how it feels.",
+          10
+        ],
+        ["Now name 3 sounds you can hear around you.", 10]
+      ],
+      "source": "Behavioural activation and sensory grounding"
+    },
+    "scribble": {
+      "name": "Scribble it out",
+      "kind": "tip",
+      "short": "Paper · a colour that calls you · let it flow",
+      "intro": "Grab a paper and a colour that's calling you. Scribble freely, for as long as you like. There's no right or wrong way. When you're done, you can keep it or tear it up. It's yours.",
+      "source": "Free scribbling as creative emotional release (art-therapy inspired)"
+    }
+  },
+
+  "journal_prompts": [
+    "What am I feeling right now, and where do I feel it in my body?",
+    "What's one thing weighing on me right now?",
+    "What would I say to a close friend who felt this way?",
+    "What do I need most right now?"
+  ],
+  "journal_source": "Expressive writing: Pennebaker",
+  "vent_backchannels": [
+    "I'm listening.",
+    "Take your time.",
+    "I'm here. Go on.",
+    "You can keep going."
+  ],
+  "listening_acks": [
+    "Well noticed.",
+    "That's lovely. Just stay with that for a moment.",
+    "Nice. Notice how that feels.",
+    "Well done. There's no rush.",
+    "Beautiful. Take a slow breath."
+  ],
+
+  "moods": {
+    "anxious": {
+      "triggers": [
+        "anxious",
+        "anxiety",
+        "nervous",
+        "panicky",
+        "panicking",
+        "worried",
+        "stressed",
+        "tense",
+        "on edge",
+        "scared"
+      ],
+      "say": "That sounds really uncomfortable. Let's slow things down together, one breath at a time.",
+      "do": ["sigh"],
+      "offer": "grounding",
+      "offer_say": "Would you like to try a short grounding exercise too?"
+    },
+    "overwhelmed": {
+      "triggers": [
+        "overwhelmed",
+        "too much",
+        "racing thoughts",
+        "can'?t think",
+        "so much to do",
+        "scattered"
+      ],
+      "say": "That's a lot to carry. Let's give your mind a small pause.",
+      "do": ["box"],
+      "offer": "dump",
+      "offer_say": "Would it help to empty your thoughts? You can just talk to me, or write them on paper."
+    },
+    "shaken": {
+      "triggers": [
+        "shaken",
+        "shocked",
+        "in shock",
+        "very upset",
+        "can'?t stop crying",
+        "distressed"
+      ],
+      "say": "I'm so sorry. Let's help your body feel a little safer.",
+      "do": ["butterfly_hug"],
+      "offer": "breath_446",
+      "offer_say": "Would you like to do some slow breathing together now?"
+    },
+    "angry": {
+      "triggers": [
+        "angry",
+        "frustrated",
+        "irritated",
+        "annoyed",
+        "furious",
+        "mad"
+      ],
+      "say": "It's okay to feel angry. Let's let some of that out safely.",
+      "do": ["breath_446"],
+      "offer": "scribble",
+      "offer_say": "Would you like to scribble it out? A paper and a colour is all you need."
+    },
+    "sad": {
+      "triggers": [
+        "sad",
+        "low",
+        "down",
+        "lonely",
+        "heartbroken",
+        "hopeless",
+        "crying"
+      ],
+      "say": "I'm sorry you're feeling low. It's okay to feel this way, and you don't have to fix it right now.",
+      "do": [],
+      "suggest": "Maybe drink a glass of water, step near a window, or send a message to someone you trust.",
+      "offer": "journal",
+      "offer_say": "Would you like a gentle journaling prompt?"
+    },
+    "numb": {
+      "triggers": [
+        "numb",
+        "empty",
+        "lethargic",
+        "sluggish",
+        "no energy",
+        "drained",
+        "blank",
+        "flat"
+      ],
+      "say": "Feeling numb or drained happens, and it's okay. Let's gently wake your body up a little.",
+      "do": ["energize_644"],
+      "offer": "move",
+      "offer_say": "Shall we try a tiny bit of movement too?"
+    },
+    "sleep": {
+      "triggers": [
+        "can'?t sleep",
+        "cannot sleep",
+        "insomnia",
+        "sleepless",
+        "not able to sleep",
+        "trouble sleeping"
+      ],
+      "say": "Let's help your body wind down.",
+      "no_feel_needed": true,
+      "do": ["breath_478"],
+      "suggest": "Try to keep the lights low and put your phone away for a little while."
+    }
+  }
+}

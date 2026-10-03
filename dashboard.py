@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 STATE = {"status": "starting", "last_heard": "", "last_reply": "",
-         "route": "", "confidence": None, "memories": 0, "emergency": None}
+         "route": "", "confidence": None, "memories": 0, "emergency": None, "activity": None}
 LOG_FILE = Path("online_log.jsonl")
 PAGE = Path(__file__).with_name("dashboard.html")
 

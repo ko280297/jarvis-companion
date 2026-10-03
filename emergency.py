@@ -18,8 +18,9 @@ CRISIS = re.compile(
 ACCIDENTAL = re.compile(
     r"\b(?:accidentally|by mistake|by accident|while (?:cooking|cutting|chopping|shaving)|knife slipped|paper cut)\b")
 SEVERE = re.compile(
-    r"\b(?:can'?t (?:move|stand|walk|feel)|a lot of blood|lots of blood|won'?t stop bleeding|bone"
-    r"|deep cut|unconscious|passed out|hit my head|head injury|can'?t breathe)\b")
+    r"\b(?:can'?t (?:move|stand|walk|feel|speak|talk)|a lot of blood|lots of blood|won'?t stop bleeding|bone"
+    r"|deep cut|unconscious|passed out|fainted|hit my head|head injury|can'?t breathe"
+    r"|(?:vomiting|throwing up|coughing) blood|slurred speech|face (?:is )?drooping)\b")
 WOMEN_SAFETY = re.compile(
     r"\bsomeone is (?:following|harassing|stalking) me\b|\bi(?:'m| am| was) being (?:followed|harassed|stalked)\b"
     r"|\bi(?:'m| am) not safe\b|\bdomestic violence\b|\bmolest\w*")
@@ -29,7 +30,10 @@ MEDICAL = re.compile(
 FIRE = re.compile(r"\b(?:there'?s a fire|on fire|fire in|smell (?:of )?smoke)\b")
 GENERAL = re.compile(
     r"\bemergency\b(?!\s+contacts?)|\b(?:somebody help|someone help|i need help|please help)\b|^help(?: me)?[!. ]*$")
-
+# Any other health complaint: never let the LLM give medical advice
+SYMPTOM = re.compile(
+    r"\b(?:fever|headache|migraine|stomach ?ache|stomach pain|pain in|hurts?|sick|unwell|not feeling well"
+    r"|cough|cold|allergy|rash|infection|medicine|tablet|dose)\b")
 
 REPEAT = re.compile(r"\b(?:repeat|again|say that again|what were the numbers)\b")
 CALM = re.compile(
@@ -172,14 +176,27 @@ def handle_emergency(text, memory):
         _active = ("medical", speech, banner)
         return _reply(speech, "urgent", banner)
 
-    # 4. Small injuries: short first-aid tips, then offer help
+    # 4. Small injuries and common symptoms: short checked tips, then offer help
     if aid:
         _offer_help = True
-        say = f"Oh no, I'm sorry. {aid['advice']} Would you like me to tell you who you can call for help?"
+        advice = re.sub(r"\b(\d{3,5})\b", lambda n: _spoken(n.group(1)), aid["advice"])   # "112" -> "1 1 2"
+        say = f"Oh no, I'm sorry. {advice} Would you like me to tell you who you can call for help?"
         banner = {"kind": "first_aid", "title": aid["title"], "text": aid["advice"],
                   "lines": [], "note": "General first-aid tips, not medical advice."}
         return _reply(say, "gentle", banner)
 
+    # 4b. Other health questions: be kind, never guess medical advice
+    if SYMPTOM.search(lower):
+        _offer_help = True
+        amb = _numbers(memory)["ambulance"]
+        say = ("I'm sorry you're not feeling well. I can't give medical advice, but if it feels serious "
+               f"or keeps getting worse, please see a doctor, or call {_spoken(amb['number'])} in an emergency. "
+               "Would you like me to tell you who you can call?")
+        banner = {"kind": "first_aid", "title": "Not feeling well?",
+                  "text": "Please see a doctor if it feels serious or keeps getting worse.",
+                  "lines": [[amb["label"], amb["number"]]], "note": "I can't give medical advice."}
+        return _reply(say, "gentle", banner)
+      
     # 5. While an emergency is open: repeat, or calm down
     if _active:
         if REPEAT.search(lower):
