@@ -27,7 +27,8 @@ from summary import SUMMARY_Q, build_summary
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
 from wellbeing import handle_wellbeing, clear_journal, clear_session, vent_mode, vent_silence
-
+from focus import (handle_focus, focus_tick, focus_due, is_focusing, focus_screen,
+                   focus_summary_line, clear_focus_log)
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
@@ -148,6 +149,8 @@ MORE_SUMMARY = re.compile(
     r"\b(?:daily|day'?s|today'?s|entire|full|whole) summary\b|\bsummary of (?:my|the) (?:day|tasks?)\b")
 BULLET = re.compile(r"^\s*(?:[*\-•]|\d+[.)])\s+")
 
+# Whisper sometimes "hears" these in a short burst of noise; ignore them when the recording was tiny
+WHISPER_GHOSTS = {"for you", "you", "thanks for watching", "thank you for watching", "so"}
 # ---------- Output ----------
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
@@ -323,7 +326,8 @@ def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
                     prewarm()       # LLM starts loading while the user is still speaking
                     break
                 checks += 1
-                if checks % REMINDER_CHECK_EVERY == 0 and reminders.due_now():
+                if checks % REMINDER_CHECK_EVERY == 0 and (
+                        focus_due() or (reminders.due_now() and not is_focusing())):
                     return REMINDER_DUE
             ding()
             for _ in range(3):              # skip the ding itself (~240 ms)
@@ -714,6 +718,7 @@ def handle_command(text, memory, history, reminders):
         count = memory.forget_all()
         reminders.clear_all()
         clear_journal()
+        clear_focus_log()
         clear_session()
         del history[1:]
         print(f"🧹 Erased {count} memories and list items, and all reminders")
@@ -789,10 +794,18 @@ def main():
     print(f"Ready! ({time.time() - t0:.1f}s)")
 
     while True:
-        if reminders.due_now():          # check every turn, not only while waiting for the wake word
+        plan = focus_tick()                          # focus or break time is up
+        if plan:
+            ding()
+            run_plan(plan, hear)
+            follow_up = True
+            continue
+        if reminders.due_now() and not is_focusing():   # reminders wait while you focus
             announce_due(reminders)
             follow_up = True
             continue
+        if focus_screen():                           # keep the countdown on screen
+            dashboard.update(activity=focus_screen())
         if chime_next:
             sleep_chime()
             print("   (conversation limit reached: say 'Hey Jarvis' to continue)")
@@ -804,9 +817,7 @@ def main():
                        max_seconds=60 if venting else MAX_RECORD_SECONDS,
                        silence=4.0 if venting else SILENCE_TO_STOP,
                        timeout=45 if venting else FOLLOW_UP_SECONDS)
-        if isinstance(audio, str):       # a reminder or timer is due
-            announce_due(reminders)
-            follow_up = True             # so the user can reply ("thanks!") without the wake word
+        if isinstance(audio, str):       # a reminder, or focus/break time, is due: handled at the top
             continue
         if audio is None:
             if venting:                                    # quiet during a thought dump: check in gently
@@ -825,6 +836,9 @@ def main():
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
             print(f"   (ignored repeated phrase, probably background noise: {text})")
+            text = ""
+        if len(audio) < 2.0 * SAMPLE_RATE and text.lower().strip(" .!?,") in WHISPER_GHOSTS:
+            print(f"   (ignored a short noise heard as: {text})")
             text = ""
         if not text:
             print("Didn't catch anything.")
@@ -855,7 +869,12 @@ def main():
             run_plan(plan, hear)
             follow_up, follow_count, chime_next = True, 0, False
             continue
-
+        # Focus & Energy: sessions, breaks, pause/resume (no LLM)
+        plan = handle_focus(text, memory)
+        if plan:
+            run_plan(plan, hear)
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
 
         if addressed:
             follow_count = 0                    # saying "Jarvis" keeps the conversation going
@@ -956,6 +975,9 @@ def main():
         # 0. Daily summary (Python only, plus weather)
         if SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower()):
             summary = build_summary(memory, reminders, weather=lambda: summary_weather(memory))
+            focus_line = focus_summary_line()
+            if focus_line:
+                summary += " " + focus_line
             say(summary, "☀️ daily summary (on device + weather)", tone="bright")
             continue
 

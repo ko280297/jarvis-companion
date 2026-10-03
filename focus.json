@@ -1,0 +1,38 @@
+{
+  "settings": {
+    "focus_minutes": 25,
+    "break_minutes": 5,
+    "long_break_minutes": 15,
+    "long_break_every": 4,
+    "tired_focus_minutes": 15,
+    "tired_break_minutes": 10,
+    "daily_limit_minutes": 240,
+    "late_hour": 23,
+    "max_skips": 2
+  },
+  "break_tips": [
+    "Try the 20 20 20 rule: look at something about 20 feet away for 20 seconds.",
+    "Stand up and stretch your arms and back for a minute.",
+    "Have a glass of water.",
+    "Roll your shoulders, and gently turn your neck from side to side.",
+    "Walk to a window, or around the room, for a minute.",
+    "If you like, say box breathing, and we'll breathe together for a minute."
+  ],
+  "energy_ask": "How was that session: focused, okay, or tired?",
+  "energy_replies": {
+    "focused": "That's great. Let's keep that rhythm.",
+    "okay": "Okay. A proper break will help the next one.",
+    "tired": "Thanks for telling me. Let's make your break a bit longer, {brk}, and keep the next session shorter, {next}.",
+    "distracted": "That happens. Let's take a slightly longer break, {brk}, and try a shorter session next, {next}."
+  },
+  "nudges": {
+    "long_day": "You've focused for {total} today. That's a lot. Maybe it's time to rest soon.",
+    "late": "It's quite late. I'll start it, but please don't push too hard tonight.",
+    "skips": "That's a few breaks skipped in a row. Short breaks help your focus last longer, so maybe take the next one."
+  },
+  "sources": [
+    "Pomodoro Technique: Francesco Cirillo",
+    "20-20-20 rule: recommended by eye-care professionals for screen work",
+    "Micro-breaks and wellbeing: Albulescu et al., PLOS ONE (2022)"
+  ]
+}
