@@ -1,0 +1,18 @@
+{
+  "default_country": "India",
+  "countries": {
+    "India": {
+      "emergency": { "label": "Emergency", "number": "112" },
+      "ambulance": { "label": "Ambulance", "number": "108" },
+      "police": { "label": "Police", "number": "100" },
+      "fire": { "label": "Fire", "number": "101" },
+      "women": { "label": "Women's helpline", "number": "181" },
+      "women_police": {
+        "label": "Women in distress, police",
+        "number": "1091"
+      },
+      "mental_health": { "label": "Tele MANAS", "number": "14416" },
+      "child": { "label": "Child helpline", "number": "1098" }
+    }
+  }
+}

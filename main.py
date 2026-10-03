@@ -6,6 +6,7 @@ import time
 from collections import deque
 from datetime import date, datetime
 from difflib import SequenceMatcher
+from emergency import handle_emergency
 
 import numpy as np
 import requests
@@ -23,6 +24,7 @@ from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAME
 from reminders import Reminders, handle_reminder_command
 from summary import SUMMARY_Q, build_summary
 from safety import is_unsafe, REFUSAL
+from emergency import handle_emergency
 
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
@@ -31,7 +33,7 @@ MAX_RECORD_SECONDS = 8      # longest question allowed
 SILENCE_TO_STOP = 1.5       # seconds of quiet that ends the question
 NO_SPEECH_TIMEOUT = 4.0     # after the wake word: give up if nothing is said
 FOLLOW_UP_SECONDS = 7.0     # conversation mode: how long to wait for a reply without the wake word
-MAX_FOLLOW_UPS = 6          # after this many turns without the wake word, go back to waiting for it
+MAX_FOLLOW_UPS = 10         # after this many turns without the wake word, go back to waiting for it
 WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
 REMINDER_CHECK_EVERY = 12   # chunks (~1 second) between reminder checks while waiting
@@ -52,7 +54,7 @@ INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on th
          "so everything you tell me stays with you.")
 CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
                 "set reminders and timers, give you a summary of your day, tell you the date and time, "
-                "and check the weather or news. "
+                "check the weather or news, and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
     r"\b(bye|goodbye|good night|that's all|thats all|that is all|nothing else|stop listening"
@@ -428,6 +430,7 @@ def save_city(city, memory):
         _expect_city = True
         return f"I couldn't find a place called {city}. Could you spell it for me, letter by letter?"
     memory.set_setting("home_city", city)
+    memory.set_setting("home_country", found.split(", ")[-1])   # for the right emergency numbers
     _expect_city = True                # allow a quick "No, it's ..." correction next
     return f"Got it, your city is {found}."
 
@@ -649,13 +652,29 @@ def main():
             print("Didn't catch anything.")
             follow_up = False
             continue
+
         print(f"You: {text}")
-        text = fix_command_word(strip_address(text))
+        stripped = strip_address(text)
+        addressed = stripped != text            # the user said "Jarvis": clearly talking to me
+        text = fix_command_word(stripped)
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
 
-        follow_count = follow_count + 1 if follow_up else 0
+        # Emergency help comes before everything else: no LLM, works offline
+        help_ = handle_emergency(text, memory)
+        if help_:
+            if help_["private"]:
+                dashboard.update(last_heard="(private)")
+            dashboard.update(emergency=help_["banner"])
+            say(help_["say"], "🚨 emergency help (offline)", tone=help_["tone"])
+            follow_up, follow_count, chime_next = True, 0, False    # stay with the user
+            continue
+
+        if addressed:
+            follow_count = 0                    # saying "Jarvis" keeps the conversation going
+        else:
+            follow_count = follow_count + 1 if follow_up else 0
         follow_up = follow_count < MAX_FOLLOW_UPS     # keep listening briefly, but not forever
-        chime_next = not follow_up                    # limit reached: play the sleep chime after this reply
+        chime_next = not follow_up                    # limit reached: play the sleep chime after this reply      
 
         short_by = len(text.split()) <= 3 and text.lower().startswith("by ")
         if END_CONVERSATION.search(text.lower()) or short_by:

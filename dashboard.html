@@ -133,6 +133,47 @@
       .blocked {
         color: var(--red);
       }
+      .sos {
+        display: none;
+        border-radius: 14px;
+        padding: 20px;
+        margin: 18px 0;
+        background: #b3261e;
+        color: #fff;
+      }
+      .sos.calm {
+        background: #2d4a7a;
+      }
+      .sos-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      .sos-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 20px;
+        padding: 4px 0;
+      }
+      .sos-num {
+        font-size: 34px;
+        font-weight: 800;
+        letter-spacing: 2px;
+      }
+      .sos.aid {
+        background: #1f6f5c;
+      }
+      .sos-text {
+        font-size: 18px;
+        line-height: 1.5;
+        margin-bottom: 8px;
+      }
+      .sos-note {
+        font-size: 13px;
+        opacity: 0.8;
+        margin-top: 8px;
+      }
     </style>
   </head>
   <body>
@@ -141,7 +182,10 @@
       All reasoning happens on this device. Only the calls listed below ever
       touched the internet.
     </div>
-
+    <div id="sos" class="sos">
+      <div class="sos-title" id="sos-title"></div>
+      <div id="sos-lines"></div>
+    </div>
     <div class="grid">
       <div class="card">
         <div class="label">Device</div>
@@ -226,6 +270,28 @@
           );
           $("status").textContent = LABELS[s.status] || s.status;
           $("memories").textContent = s.memories;
+          const e = s.emergency;
+          $("sos").style.display = e ? "block" : "none";
+          if (e) {
+            $("sos").className =
+              "sos" +
+              (e.kind === "crisis"
+                ? " calm"
+                : e.kind === "first_aid"
+                  ? " aid"
+                  : "");
+            $("sos-title").textContent = e.title;
+            $("sos-lines").innerHTML =
+              (e.text ? `<div class="sos-text">${esc(e.text)}</div>` : "") +
+              (e.lines || [])
+                .map(
+                  (l) =>
+                    `<div class="sos-line"><span>${esc(l[0])}</span><span class="sos-num">${esc(l[1])}</span></div>`,
+                )
+                .join("") +
+              (e.note ? `<div class="sos-note">${esc(e.note)}</div>` : "");
+          }
+
           $("heard").textContent = s.last_heard || "—";
           $("reply").textContent = s.last_reply || "—";
           $("route").textContent = s.route || "—";

@@ -1,0 +1,48 @@
+{
+  "sprain": {
+    "title": "Sprain",
+    "triggers": [
+      "sprain",
+      "sprained",
+      "twisted my (?:ankle|wrist|knee|foot)",
+      "rolled my ankle"
+    ],
+    "advice": "Rest it and try not to put weight on it. Put a cold pack wrapped in a cloth on it for 15 to 20 minutes every few hours, and keep it raised on a pillow. If you can't put any weight on it, or it looks badly swollen or out of shape, please get it checked by a doctor."
+  },
+  "cut": {
+    "title": "Small cut",
+    "triggers": [
+      "cut my (?:finger|hand|thumb|arm|leg|foot)",
+      "paper cut",
+      "small cut",
+      "knife slipped",
+      "cut myself (?:accidentally|by mistake|while)"
+    ],
+    "advice": "Press on it with a clean cloth to stop the bleeding, then rinse it with clean water and cover it with a bandage. If it's deep, keeps bleeding after 10 minutes of pressure, or was made by something rusty, please see a doctor."
+  },
+  "burn": {
+    "title": "Minor burn",
+    "triggers": [
+      "burn(?:ed|t) my",
+      "got (?:a )?burn(?:ed|t)?",
+      "minor burn",
+      "touched (?:a |the )?hot"
+    ],
+    "advice": "Cool it under cool running water for about 20 minutes. Don't put ice, butter or toothpaste on it. Then cover it loosely with a clean cloth. If it's large, on your face, or blistering badly, please see a doctor."
+  },
+  "bruise": {
+    "title": "Bump or bruise",
+    "triggers": [
+      "bruise",
+      "bruised",
+      "bumped my",
+      "hit my (?:knee|arm|leg|elbow|toe|hand)"
+    ],
+    "advice": "Put a cold pack wrapped in a cloth on it for about 15 minutes, and rest it. It should feel better in a few days. If the pain is very bad or it doesn't improve, please see a doctor."
+  },
+  "nosebleed": {
+    "title": "Nosebleed",
+    "triggers": ["nose ?bleed", "nose is bleeding", "bleeding from my nose"],
+    "advice": "Sit up, lean slightly forward, and pinch the soft part of your nose for 10 to 15 minutes. Don't tilt your head back. If it doesn't stop after 20 minutes, please get medical help."
+  }
+}
