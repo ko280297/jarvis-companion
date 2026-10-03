@@ -29,6 +29,8 @@ from emergency import handle_emergency
 from wellbeing import handle_wellbeing, clear_journal, clear_session, vent_mode, vent_silence
 from focus import (handle_focus, focus_tick, focus_due, is_focusing, focus_screen,
                    focus_summary_line, clear_focus_log)
+from activities import handle_activity, is_active, end_activity, game_reprompt
+
 # ---------- Audio ----------
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
@@ -57,6 +59,7 @@ INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on th
          "so everything you tell me stays with you.")
 CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
                 "set reminders and timers, give you a summary of your day, tell you the date and time, "
+                "play simple games, "
                 "check the weather or news, guide you through calming exercises when you need a moment, "
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
@@ -208,6 +211,15 @@ def split_items(text):
             items.append(part)
     return items
 
+def play_sequence(colours, screen):
+    """Memory game: light up each colour on screen while saying it, then hand over to the player."""
+    print(f"   🧠 Pattern: {', '.join(colours)}")
+    for i, colour in enumerate(colours):
+        dashboard.update(activity={**screen, "flash": colour, "flash_id": time.time()})
+        speak(f"First, {colour}." if i == 0 else f"Then {colour}.", "calm")
+        dashboard.update(activity={**screen, "flash": None})
+        time.sleep(0.4)
+    say("Now it's your turn.", "🎮 game (on device)", tone="bright")
 
 def run_plan(plan, hear=None):
     """Carry out a wellbeing plan: things to say, timed breathing cues, listening steps and screen updates.
@@ -804,7 +816,7 @@ def main():
             announce_due(reminders)
             follow_up = True
             continue
-        if focus_screen():                           # keep the countdown on screen
+        if focus_screen() and not is_active():       # keep the countdown on screen (unless a game is on
             dashboard.update(activity=focus_screen())
         if chime_next:
             sleep_chime()
@@ -874,6 +886,7 @@ def main():
         if END_CONVERSATION.search(text.lower()) or short_by:
                     say("Okay, talk soon!", "👋 conversation ended", tone="bright")
                     _guest = None
+                    end_activity()
                     follow_up, chime_next = False, False
                     continue
                 
@@ -883,6 +896,17 @@ def main():
             run_plan(plan, hear)
             follow_up, follow_count, chime_next = True, 0, False
             continue
+
+        # Games: while one is running, it gets the first say (emergencies still come first)
+        act = handle_activity(text)
+        if act:
+            dashboard.update(activity=act["screen"])
+            say(act["say"], "🎮 game (on device)", tone="bright")
+            if act.get("show"):
+                play_sequence(act["show"], act["screen"])
+            follow_up, follow_count, chime_next = True, 0, False    # games don't hit the follow-up limit
+            continue
+    
 
         if addressed:
             follow_count = 0                    # saying "Jarvis" keeps the conversation going
@@ -1001,6 +1025,14 @@ def main():
         online_answer = answer_online_question(text, memory.get_setting("home_city"))
         if online_answer:
             say(online_answer, "🌐 internet (rule)")
+            continue
+
+        # During a game, anything that isn't a move or a real command gets a reprompt, never the LLM
+        act = game_reprompt()
+        if act:
+            dashboard.update(activity=act["screen"])
+            say(act["say"], "🎮 game (on device)", tone="bright")
+            follow_up, follow_count, chime_next = True, 0, False
             continue
 
         # 4. Gate -> LLM router -> validated tool (lists or internet)
