@@ -22,7 +22,7 @@ START = re.compile(r"\b(?:start|begin)(?: a| the| my)? focus\b|\bfocus (?:mode|s
 LEFT = re.compile(r"\b(?:how (?:much|many) (?:time|minutes?)|time) (?:is )?left\b|\bhow long (?:is )?left\b")
 PAUSE = re.compile(r"\bpause\b")
 RESUME = re.compile(r"\b(?:resume|unpause)\b|^continue\b")
-STOP = re.compile(r"\b(?:stop|end|cancel|finish|quit)(?: the| my)? (?:focus|session|timer|pomodoro)\b")
+STOP = re.compile(r"\b(?:stop|end|cancel|finish|quit)(?: the| my)? (?:focus|session|timer|pomodoro)\b|^stop$")
 SKIP_BREAK = re.compile(r"\b(?:skip|end|stop)(?: the| my)? break\b")
 NOTE = re.compile(r"^(?:note|park|jot down|write down)\b[:,]?\s*(?:that\s+)?(.+)$")
 STATS = re.compile(r"\bhow (?:did i do|much did i (?:focus|work)|long did i (?:focus|work))\b"
@@ -190,7 +190,7 @@ def focus_tick():
         _state = {"kind": "break", "task": task, "minutes": minutes, "ends": time.time() + minutes * 60}
         msg = f"Great work! That was {_mins(done)}{' on ' + task if task else ''}. "
         msg += (f"You've earned a longer break: {_mins(minutes)}. " if long_break
-                else f"Time for a {_mins(minutes)} break. ")
+                else f"Time for a {minutes} minute break. ")
         msg += _last_tip
         if total >= S["daily_limit_minutes"] and _nudged_day != date.today():
             _nudged_day = date.today()
@@ -220,7 +220,11 @@ def handle_focus(text, memory):
     lower = text.lower().strip(" .!?,")
 
     # "How was that session?" -> focused / okay / tired / distracted
-    if _ask_energy:
+    # ...but a command in the same sentence wins: "Okay, I want to skip the break" means skip
+    is_command = NOTE.match(lower) or any(
+        p.search(lower) for p in (SKIP_BREAK, STOP, START, PAUSE, RESUME, LEFT, STATS))
+    if _ask_energy and not is_command and len(lower.split()) <= 6 \
+            and not re.search(r"\b(?:bye|goodbye|night|goodnight|thanks|thank you)\b", lower):
         for label, pattern in ENERGY:
             if pattern.search(lower):
                 _ask_energy = False

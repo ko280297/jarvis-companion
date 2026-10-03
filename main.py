@@ -61,7 +61,7 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
-    r"\b(bye|goodbye|good night|that's all|thats all|that is all|nothing else|stop listening"
+    r"\b(bye|goodbye|good ?night|that's all|thats all|that is all|nothing else|stop listening"
     r"|talk to you later|ttyl|see you)\b")
 START_OVER = re.compile(r"\b(start (?:over|again|fresh|from scratch)|reset (?:the )?conversation|new conversation)\b")
 
@@ -869,6 +869,14 @@ def main():
             run_plan(plan, hear)
             follow_up, follow_count, chime_next = True, 0, False
             continue
+        
+        short_by = len(text.split()) <= 3 and re.match(r"by\b", text.lower())
+        if END_CONVERSATION.search(text.lower()) or short_by:
+                    say("Okay, talk soon!", "👋 conversation ended", tone="bright")
+                    _guest = None
+                    follow_up, chime_next = False, False
+                    continue
+                
         # Focus & Energy: sessions, breaks, pause/resume (no LLM)
         plan = handle_focus(text, memory)
         if plan:
@@ -883,12 +891,7 @@ def main():
         follow_up = follow_count < MAX_FOLLOW_UPS     # keep listening briefly, but not forever
         chime_next = not follow_up                    # limit reached: play the sleep chime after this reply      
 
-        short_by = len(text.split()) <= 3 and text.lower().startswith("by ")
-        if END_CONVERSATION.search(text.lower()) or short_by:
-            say("Okay, talk soon!", "👋 conversation ended", tone="bright")
-            _guest = None
-            follow_up, chime_next = False, False
-            continue
+       
 
         if START_OVER.search(text.lower()):
             del history[1:]
@@ -974,11 +977,14 @@ def main():
 
         # 0. Daily summary (Python only, plus weather)
         if SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower()):
-            summary = build_summary(memory, reminders, weather=lambda: summary_weather(memory))
+            parts = [build_summary(memory, reminders, weather=lambda: None)]   # your day first
             focus_line = focus_summary_line()
             if focus_line:
-                summary += " " + focus_line
-            say(summary, "☀️ daily summary (on device + weather)", tone="bright")
+                parts.append(focus_line)                                       # then what you've done
+            weather_line = summary_weather(memory)
+            if weather_line:
+                parts.append(weather_line) # weather last
+            say(" ".join(parts), "☀️ daily summary (on device + weather)", tone="bright")
             continue
 
         # 1. Exact commands (fast, no LLM)
