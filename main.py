@@ -4,7 +4,6 @@ import random
 import re
 import threading
 import time
-
 from collections import deque
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -30,8 +29,11 @@ from wellbeing import handle_wellbeing, clear_journal, clear_session, vent_mode,
 from focus import (handle_focus, focus_tick, focus_due, is_focusing, focus_screen,
                    focus_summary_line, clear_focus_log)
 from activities import handle_activity, is_active, end_activity, game_reprompt
+from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_screen
 
 # ---------- Audio ----------
+STT_MODEL = "base.en"           # everyday commands: fast
+MEETING_STT_MODEL = "small.en"  # meetings: slower, but hears names and accents much better
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
 MAX_RECORD_SECONDS = 8      # longest question allowed
@@ -58,8 +60,9 @@ ASSISTANT_NAME = "Jarvis"
 INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on this device, "
          "so everything you tell me stays with you.")
 CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
-                "set reminders and timers, give you a summary of your day, tell you the date and time, "
-                "play simple games, "
+                "set reminders and timers, run focus sessions with healthy breaks, "
+                "give you a summary of your day, tell you the date and time, "
+                "play simple games, listen in meetings for dates and tasks, "
                 "check the weather or news, guide you through calming exercises when you need a moment, "
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
@@ -90,7 +93,6 @@ SYSTEM_PROMPT = (
     " Only if the user asks about health, symptoms or treatment: give no medical advice, kindly suggest a doctor."
     " Always call the user by the name given in the system message, never by any other name."
 )
-
 
 TOOLS = [
     {"type": "function", "function": {
@@ -151,9 +153,12 @@ PRIVATE_Q = re.compile(
 MORE_SUMMARY = re.compile(
     r"\b(?:daily|day'?s|today'?s|entire|full|whole) summary\b|\bsummary of (?:my|the) (?:day|tasks?)\b")
 BULLET = re.compile(r"^\s*(?:[*\-•]|\d+[.)])\s+")
+NOISE_TAGS = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")   # [BLANK_AUDIO], (music), *cough*
 
 # Whisper sometimes "hears" these in a short burst of noise; ignore them when the recording was tiny
 WHISPER_GHOSTS = {"for you", "you", "thanks for watching", "thank you for watching", "so"}
+
+
 # ---------- Output ----------
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
@@ -163,6 +168,7 @@ def say(text, route, confidence=None, tone="calm"):
     print(f"🔊 Jarvis: {text}")
     dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence)
     speak(text, tone)
+
 
 EMPATHY_PROMPT = (
     f"You are {ASSISTANT_NAME}, a warm, caring companion. The user just told you how they feel. "
@@ -198,6 +204,7 @@ def empathy_line(user_text, earlier=()):
         return None
     return line
 
+
 _last_ack = None
 
 
@@ -211,18 +218,26 @@ def split_items(text):
             items.append(part)
     return items
 
+
 def play_sequence(colours, screen):
     """Memory game: light up each colour on screen while saying it, then hand over to the player."""
     print(f"   🧠 Pattern: {', '.join(colours)}")
     for i, colour in enumerate(colours):
         dashboard.update(activity={**screen, "flash": colour, "flash_id": time.time()})
-        speak(f"First, {colour}." if i == 0 else f"Then {colour}.", "calm")
+        if i == 0:
+            words = f"First, {colour}."
+        elif colour == colours[i - 1]:
+            words = f"Then {colour} again."          # a repeated colour, made easy to notice
+        else:
+            words = f"Then {colour}."
+        speak(words, "calm")
         dashboard.update(activity={**screen, "flash": None})
-        time.sleep(0.4)
+        time.sleep(0.7)                              # a clear gap, so repeated colours flash twice
     say("Now it's your turn.", "🎮 game (on device)", tone="bright")
 
+
 def run_plan(plan, hear=None):
-    """Carry out a wellbeing plan: things to say, timed breathing cues, listening steps and screen updates.
+    """Carry out a plan: things to say, timed breathing cues, listening steps and screen updates.
     hear(seconds) -> what the user said ('' if nothing, None if an emergency took over)."""
     global _last_ack
     for step in plan:
@@ -281,7 +296,9 @@ def run_plan(plan, hear=None):
         elif kind == "screen":
             dashboard.update(activity=step[1])
         elif kind == "silent":                             # thought dump: just keep listening
-            pass      
+            pass
+
+
 # ---------- Listening ----------
 _threshold = 300.0    # speech loudness threshold, learned from the room while waiting for the wake word
 
@@ -312,9 +329,10 @@ def rms(frame):
 
 
 def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
-           silence=SILENCE_TO_STOP, timeout=FOLLOW_UP_SECONDS):
+           silence=SILENCE_TO_STOP, timeout=FOLLOW_UP_SECONDS, level=None):
     """Wake-word mode: wait for 'Hey Jarvis', then record (and keep an eye on due reminders).
     Follow-up mode: skip the wake word and just listen briefly for a reply.
+    level: a lower loudness level for quieter voices (meetings).
     Returns the audio, REMINDER_DUE if a reminder needs announcing, or None if nobody spoke."""
     global _threshold
     chunk_sec = CHUNK / SAMPLE_RATE
@@ -339,7 +357,7 @@ def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
                     break
                 checks += 1
                 if checks % REMINDER_CHECK_EVERY == 0 and (
-                        focus_due() or (reminders.due_now() and not is_focusing())):
+                        focus_due() or (reminders.due_now() and not is_focusing() and not meeting_active())):
                     return REMINDER_DUE
             ding()
             for _ in range(3):              # skip the ding itself (~240 ms)
@@ -354,7 +372,7 @@ def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
             frame, _ = stream.read(CHUNK)
             frame = frame.flatten()
             frames.append(frame)
-            if rms(frame) > _threshold:
+            if rms(frame) > (level or _threshold):
                 heard_speech, quiet = True, 0.0
             else:
                 quiet += chunk_sec
@@ -547,6 +565,7 @@ def take_introduction(text):
         return m.group(2).strip(), m.group(1).title()
     return text, None
 
+
 def detect_guest(lower, user):
     """'I'm Krati's friend Shubhangi' / 'you're talking to my friend Shubhangi' -> 'Shubhangi'."""
     owner = re.escape(user.lower()) if user else r"\w+"
@@ -571,6 +590,7 @@ def for_speech(text):
         text = " ".join(others[:1] + [", ".join(bullets) + "."] + others[1:])
     text = re.sub(r"[*_#`]", "", text)
     return " ".join(text.split())
+
 
 SPELLED = re.compile(r"\b[a-z](?:[\s\-.,]+[a-z]\b){2,}")
 
@@ -672,7 +692,7 @@ def handle_command(text, memory, history, reminders):
 
     # ----- About Jarvis -----
     if re.match(r"(?:who are you|what(?:'s| is) your name|introduce yourself)\b"
-                r"(?!\s+(?:talking|speaking|interacting|chatting))", lower):    
+                r"(?!\s+(?:talking|speaking|interacting|chatting))", lower):
         say(INTRO, f"🙂 about {ASSISTANT_NAME}", tone="bright")
         return True
 
@@ -707,7 +727,6 @@ def handle_command(text, memory, history, reminders):
         say(f"Your city is set to {city}." if city else "I don't know your city yet. You can say, my city is...",
             "⚙️ city (on device)")
         return True
-   
 
     # ----- Memory -----
     if lower.startswith("remember"):
@@ -779,7 +798,8 @@ def main():
         openwakeword.utils.download_models()         # only needed the very first time
         wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
     step("wake word")
-    stt = SttModel("base.en")
+    stt = SttModel(STT_MODEL)
+    meeting_stt = None                               # loaded the first time meeting mode starts
     step("speech to text")
     memory = MemoryStore()
     reminders = Reminders()
@@ -791,12 +811,13 @@ def main():
     follow_up = False
     follow_count = 0
     chime_next = False
+
     def hear(seconds):
         """Listen for a short answer during an exercise. '' = nothing heard, None = an emergency took over."""
         audio = listen(wake, reminders, True, max_seconds=seconds + 10, silence=3.0, timeout=seconds)
         if audio is None or isinstance(audio, str):
             return ""
-        heard = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", "", transcribe(stt, audio, memory)).strip()
+        heard = NOISE_TAGS.sub("", transcribe(stt, audio, memory)).strip()
         print(f"You: {heard}")
         help_ = handle_emergency(heard, memory) if heard else None
         if help_:
@@ -804,6 +825,7 @@ def main():
             say(help_["say"], "🚨 emergency help (offline)", tone=help_["tone"])
             return None
         return heard
+
     print(f"Ready! ({time.time() - t0:.1f}s)")
 
     while True:
@@ -813,17 +835,42 @@ def main():
             run_plan(plan, hear)
             follow_up = True
             continue
-        if reminders.due_now() and not is_focusing():   # reminders wait while you focus
+        if reminders.due_now() and not is_focusing() and not meeting_active():   # wait during focus / meetings
             announce_due(reminders)
             follow_up = True
             continue
-        if focus_screen() and not is_active():       # keep the countdown on screen (unless a game is on
+        if focus_screen() and not is_active():       # keep the countdown on screen (unless a game is on)
             dashboard.update(activity=focus_screen())
         if chime_next:
             sleep_chime()
             print("   (conversation limit reached: say 'Hey Jarvis' to continue)")
             chime_next = False
         dashboard.update(memories=len(memory.all()))
+
+        # Meeting mode: listen quietly in 15-second pieces, note dates and tasks, never reply mid-meeting
+        if meeting_active():
+            dashboard.update(status="listening", activity=meeting_screen())
+            if meeting_stt is None:
+                print("   (loading the meeting speech model...)")
+                meeting_stt = SttModel(MEETING_STT_MODEL)
+            audio = listen(wake, reminders, True, max_seconds=15, silence=99, timeout=15,
+                           level=max(_threshold * 0.5, 150))     # full 15 s pieces, quieter voices count
+            if audio is None or isinstance(audio, str):
+                continue
+            heard = NOISE_TAGS.sub("", transcribe(meeting_stt, audio, memory)).strip()
+            if not heard:
+                continue
+            print(f"   📝 (meeting) {heard}")
+            help_ = handle_emergency(heard, memory)              # emergencies still come first
+            if help_:
+                dashboard.update(emergency=help_["banner"])
+                say(help_["say"], "🚨 emergency help (offline)", tone=help_["tone"])
+                continue
+            plan = meeting_chunk(heard, memory)
+            if plan:
+                run_plan(plan, hear)
+            follow_up = not meeting_active()                     # after "meeting mode off", stay for the questions
+            continue
 
         venting = vent_mode()
         audio = listen(wake, reminders, follow_up or venting,
@@ -844,7 +891,7 @@ def main():
 
         dashboard.update(status="thinking")
         text = transcribe(stt, audio, memory)
-        text = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", "", text).strip()   # drop [BLANK_AUDIO], (music), *cough*  
+        text = NOISE_TAGS.sub("", text).strip()                                   # drop [BLANK_AUDIO], (music), *cough*
         text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
@@ -874,7 +921,14 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False    # stay with the user
             continue
 
-        # during a thought dump: did the recording end because they paused (not because 60 s ran out)?
+        # Meeting mode: "meeting mode on", and the yes/no questions after the meeting
+        plan = handle_meeting(text, memory)
+        if plan:
+            run_plan(plan, hear)
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+
+        # Wellbeing. During a thought dump: did the recording end because they paused (not because 60 s ran out)?
         paused = not venting or len(audio) < (60 - 1) * SAMPLE_RATE
         plan = handle_wellbeing(text, memory, paused=paused)
         if plan:
@@ -882,15 +936,16 @@ def main():
             run_plan(plan, hear)
             follow_up, follow_count, chime_next = True, 0, False
             continue
-        
+
+        # Goodbye (a single "bye" during a game is usually "five" misheard, so the game gets it)
         short_by = len(text.split()) <= 3 and re.match(r"by\b", text.lower())
         one_word = len(text.split()) <= 1
         if (END_CONVERSATION.search(text.lower()) or short_by) and not (is_active() and one_word):
-                    say("Okay, talk soon!", "👋 conversation ended", tone="bright")
-                    _guest = None
-                    follow_up, chime_next = False, False
-                    continue
-                
+            say("Okay, talk soon!", "👋 conversation ended", tone="bright")
+            _guest = None
+            follow_up, chime_next = False, False
+            continue
+
         # Focus & Energy: sessions, breaks, pause/resume (no LLM)
         plan = handle_focus(text, memory)
         if plan:
@@ -907,16 +962,13 @@ def main():
                 play_sequence(act["show"], act["screen"])
             follow_up, follow_count, chime_next = True, 0, False    # games don't hit the follow-up limit
             continue
-    
 
         if addressed:
             follow_count = 0                    # saying "Jarvis" keeps the conversation going
         else:
             follow_count = follow_count + 1 if follow_up else 0
         follow_up = follow_count < MAX_FOLLOW_UPS     # keep listening briefly, but not forever
-        chime_next = not follow_up                    # limit reached: play the sleep chime after this reply      
-
-       
+        chime_next = not follow_up                    # limit reached: play the sleep chime after this reply
 
         if START_OVER.search(text.lower()):
             del history[1:]
@@ -947,7 +999,7 @@ def main():
             say(f"That's {user}'s private information, so I'll keep it for them. Is there anything else I can help with?",
                 "🔒 guest mode: kept private", tone="gentle")
             continue
-        
+
         # Waiting for yes/no on a name change?
         if _pending_name:
             name, _pending_name = _pending_name, None
@@ -998,7 +1050,7 @@ def main():
                 _greeting = f"Nice to meet you, {new_name}!"
                 if not text:
                     say("", "⚙️ name saved on device", tone="bright")
-                    continue       
+                    continue
 
         # 0. Daily summary (Python only, plus weather)
         if SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower()):
@@ -1008,7 +1060,7 @@ def main():
                 parts.append(focus_line)                                       # then what you've done
             weather_line = summary_weather(memory)
             if weather_line:
-                parts.append(weather_line) # weather last
+                parts.append(weather_line)                                     # weather last
             say(" ".join(parts), "☀️ daily summary (on device + weather)", tone="bright")
             continue
 
@@ -1037,7 +1089,7 @@ def main():
             continue
 
         # 4. Gate -> LLM router -> validated tool (lists or internet)
-        found = [] if _guest else memory.search(text) 
+        found = [] if _guest else memory.search(text)      # a guest never gets the user's memories
         score, category = gate(text, example_vecs)
         print(f"🚦 Gate: {score:.2f} ({category})")
         wants_lists = category == "lists" and score >= GATE_THRESHOLD

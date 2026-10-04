@@ -1,5 +1,5 @@
-.venv/ 
-*.onnx 
-__pycache__/ 
-*.db 
-*.jsonl 
+.venv/
+__pycache__/
+memories.db
+online_log.jsonl
+*.log

@@ -108,7 +108,6 @@ class TicTacToe(Activity):
     def _spot(self, lower):
         """'5' / 'center' / 'top left' / 'to' (two) -> board index 0-8, or None."""
         lower = lower.replace("upper", "top").replace("lower", "bottom")
-        lower = lower.replace("upper", "top").replace("lower", "bottom")
         lower = re.sub(r"\bstop\b", "top", lower)     # "stop middle" is how "top middle" is often heard
         digits = re.findall(r"\b[1-9]\b", lower)
         if digits:
