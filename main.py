@@ -644,6 +644,16 @@ def handle_command(text, memory, history, reminders):
         say(reminder_reply, "⏰ reminders (on device)")
         return True
 
+    # "add milk, eggs and bread to my grocery list" -> three separate items
+    m = re.match(r"(?:add|put)\s+(.+?)\s+(?:to|on|in)\s+(?:my\s+|the\s+)?(.+?)\s*list$", lower)
+    if m and re.search(r",|\band\b", m.group(1)):
+        items = [i.strip() for i in re.split(r",|\band\b", m.group(1)) if i.strip()]
+        for item in items:
+            handle_list_command(f"add {item} to my {m.group(2)} list", memory)
+        names = ", ".join(items[:-1]) + " and " + items[-1]
+        say(f"Added {names} to your {m.group(2)} list.", "📝 lists (on device)")
+        return True
+
     list_reply = handle_list_command(text, memory)
     if list_reply:
         say(list_reply, "📝 lists (on device)")
@@ -1144,7 +1154,10 @@ def main():
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
         if not found and not declined and is_question and not about_assistant and confidence < CONFIDENCE_THRESHOLD:
             print(f"   (withheld guess: {reply})")
-            reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
+                        if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
+                reply = "I don't have that saved. You can tell me, and I'll remember it."
+            else:
+                reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
             route_name = "🤔 not sure (guess withheld)"
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
