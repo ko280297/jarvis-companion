@@ -6,12 +6,12 @@ Loading models...
    ✔ wake word  (0.1s)
    ✔ speech to text  (0.3s)
    ✔ memory, reminders, voice  (0.3s)
-   ✔ intent gate  (3.2s)
-Ready! (3.2s)
+   ✔ intent gate  (2.5s)
+Ready! (2.5s)
 
 ⌨️  You> what time is it
 You: what time is it
-🔊 Jarvis: It is 4:34 PM.
+🔊 Jarvis: It is 6:45 PM.
 
 ⌨️  You> my name is Krati
 You: my name is Krati
@@ -31,7 +31,7 @@ You: where are my keys
 🚦 Gate: 0.24 (lists)
 📚 Using memory:
 - my keys are in the blue drawer (saved on Sunday, 04 October 2026)
-🤔 Confidence: 0.91  (8.2s)
+🤔 Confidence: 0.91  (9.6s)
 🔊 Jarvis: Your keys are in the blue drawer.
 
 ⌨️  You> forget that
@@ -42,8 +42,8 @@ You: forget that
 ⌨️  You> where are my keys
 You: where are my keys
 🚦 Gate: 0.24 (lists)
-🤔 Confidence: 0.53  (3.1s)
-   (withheld guess: check the usual places: the kitchen, the car, and the desk.)
+🤔 Confidence: 0.55  (3.1s)
+   (withheld guess: check the usual places: the kitchen drawer, the car, the coat pocket.)
 🔊 Jarvis: I don't have that saved. You can tell me, and I'll remember it.
 
 ⌨️  You> this is my friend Rhea
@@ -57,16 +57,16 @@ You: who are my friends
 
 ⌨️  You> add milk and eggs to my grocery list
 You: add milk and eggs to my grocery list
-🔊 Jarvis: Added milk and eggs to your grocery list.
+🔊 Jarvis: Added eggs to your grocery list. milk is already there.
 
 ⌨️  You> what's on my grocery list
 You: what's on my grocery list
-🔊 Jarvis: Your grocery list has 13 items: eggs; milk; bread; knife; Ad Magi; eggs; eggs; eggs; eggs; eggs; eggs; milk; eggs.
+🔊 Jarvis: Your grocery list has: milk, bread, knife, ad magi, eggs.
    (conversation limit reached: say 'Hey Jarvis' to continue)
 
 ⌨️  You> remove milk from my grocery list
 You: remove milk from my grocery list
-🔊 Jarvis: Removed it from your grocery list.
+🔊 Jarvis: Removed milk from your grocery list.
 
 ⌨️  You> remind me in 10 minutes to stretch
 You: remind me in 10 minutes to stretch
@@ -88,7 +88,7 @@ You: what's the date next sunday
 You: what's my day
 🌐 ONLINE ✅ → geocoding-api.open-meteo.com | sent: 'Pune' | ok
 🌐 ONLINE ✅ → api.open-meteo.com | sent: '18.52,73.86' | ok
-🔊 Jarvis: Good afternoon, Krati! It's Sunday, 4 October. You have no more reminders today. Your grocery list has 12 items. You've focused for 11 minutes today, across 7 sessions. In Pune, India it's 33 degrees right now, partly cloudy. Chance of rain is 0 percent.
+🔊 Jarvis: Good evening, Krati! It's Sunday, 4 October. You have no more reminders today. Your grocery list has 4 items. You've focused for 11 minutes today, across 7 sessions. In Pune, India it's 28 degrees right now, clear sky. Chance of rain is 2 percent.
 
 ⌨️  You> I'm Krati's friend Shubhangi
 You: I'm Krati's friend Shubhangi
@@ -190,7 +190,7 @@ You: stop focus
 
 ⌨️  You> how did I do today
 You: how did I do today
-🔊 Jarvis: Today so far, you did 7 focus sessions, 11 minutes in total. You felt mostly okay. You have 3 open tasks.
+🔊 Jarvis: Today so far, you did 7 focus sessions, 11 minutes in total. You felt mostly tired. You have 3 open tasks.
 
 ⌨️  You> let's play tic tac toe
 You: let's play tic tac toe
@@ -198,7 +198,7 @@ You: let's play tic tac toe
 
 ⌨️  You> 5
 You: 5
-🔊 Jarvis: I'll take 9, the bottom right. Your move.
+🔊 Jarvis: I'll take 1, the top left. Your move.
 
 ⌨️  You> top right
 You: top right
@@ -210,11 +210,11 @@ You: stop the game
 
 ⌨️  You> let's play mental math
 You: let's play mental math
-🔊 Jarvis: Let's do 10 quick questions. Say repeat to hear one again, or skip to move on. Question 1. What's 46 minus 29?
+🔊 Jarvis: Let's do 10 quick questions. Say repeat to hear one again, or skip to move on. Question 1. What's 55 minus 19?
 
 ⌨️  You> skip
 You: skip
-🔊 Jarvis: It's 17. Question 2. What's 9 times 9?
+🔊 Jarvis: It's 36. Question 2. What's 18 minus 12?
 
 ⌨️  You> stop the game
 You: stop the game
@@ -223,7 +223,7 @@ You: stop the game
 ⌨️  You> let's play memory sequence
 You: let's play memory sequence
 🔊 Jarvis: Let's play memory sequence! Watch and listen, then say the colours back in order.
-   🧠 Pattern: yellow, yellow, red
+   🧠 Pattern: red, blue, red
 🔊 Jarvis: Now it's your turn.
 
 ⌨️  You> stop the game
@@ -254,8 +254,8 @@ You: yes
 ⌨️  You> no
 You: no
 🚦 Gate: 0.21 (lists)
-🤔 Confidence: 0.74  (2.7s)
-🔊 Jarvis: Good afternoon, Krati! How are you feeling today?
+🤔 Confidence: 0.72  (2.6s)
+🔊 Jarvis: Good evening, Krati! How are you today?
 
 ⌨️  You> what can you do
 You: what can you do
@@ -275,7 +275,7 @@ You: am I free tomorrow
 
 ⌨️  You> what did I do this week
 You: what did I do this week
-🔊 Jarvis: This week so far, you did 7 focus sessions, 11 minutes in total. You felt mostly okay. You had 1 thing on your schedule: meeting with Rahul today. You have 4 open tasks.
+🔊 Jarvis: This week so far, you did 7 focus sessions, 11 minutes in total. You felt mostly tired. You had 1 thing on your schedule: meeting with Rahul today. You have 4 open tasks.
 
 ⌨️  You> look up black holes
 You: look up black holes
@@ -289,8 +289,8 @@ You: look up my friend Rhea
 ⌨️  You> what is the meaning of Sarita
 You: what is the meaning of Sarita
 🚦 Gate: 0.07 (get_news)
-🤔 Confidence: 0.55  (6.2s)
-   (withheld guess: Sarita is a name that means "lucky" in Hindi.)
+🤔 Confidence: 0.53  (6.7s)
+   (withheld guess: Sarita is a name that means "lady" or "beautiful one" in Hindi. It's a traditional name often given to girls.)
 🔊 Jarvis: Hmm, I'm not sure about that one. Want me to look it up online?
 
 ⌨️  You> yes
@@ -301,7 +301,7 @@ You: yes
 ⌨️  You> who won the 1983 cricket world cup
 You: who won the 1983 cricket world cup
 🚦 Gate: 0.06 (get_weather)
-🤔 Confidence: 0.93  (7.0s)
+🤔 Confidence: 0.90  (3.6s)
 🔊 Jarvis: The West Indies won the 1983 Cricket World Cup. I can double-check that online if you like.
 
 ⌨️  You> yes

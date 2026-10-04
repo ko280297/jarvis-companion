@@ -1,3 +1,4 @@
+import sys
 import json
 import math
 import random
@@ -32,6 +33,20 @@ from activities import handle_activity, is_active, end_activity, game_reprompt
 from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_screen
 from lookup import handle_lookup, offer_lookup
 from period import handle_period
+
+# Testing aid: "python main.py --log" also writes everything to session_log.txt (never committed)
+if "--log" in sys.argv:
+    class _Tee:
+        def __init__(self, *streams):
+            self.streams = streams
+        def write(self, data):
+            for s in self.streams:
+                s.write(data)
+                s.flush()
+        def flush(self):
+            for s in self.streams:
+                s.flush()
+    sys.stdout = _Tee(sys.stdout, open("session_log.txt", "a", encoding="utf-8"))
 
 # ---------- Audio ----------
 STT_MODEL = "base.en"           # everyday commands: fast
@@ -144,6 +159,8 @@ _greeting = ""         # e.g. "Nice to meet you, Krati!" to put in front of the 
 _pending_name = None   # waiting for "yes/no": should I really change the user's name?
 _expect_city = False   # just set or asked about the city -> "No, it's Pune" / "P-U-N-E" corrects it
 _guest = None          # (name, since) while a friend is talking: RAM only
+_offer_remember = None   # "I love badminton" -> "Should I remember that?"
+_last_list = None        # "what's left?" reads the list we just talked about
 GUEST_MINUTES = 10
 
 WHO_TALKING = re.compile(
@@ -168,7 +185,7 @@ def say(text, route, confidence=None, tone="calm"):
     text = (_greeting + " " + text).strip()
     _greeting = ""
     print(f"🔊 Jarvis: {text}")
-    dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence)
+    dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence, tone=tone)
     speak(text, tone)
 
 
@@ -318,6 +335,10 @@ def _chime(first_hz, second_hz, volume):
 def ding():
     """Rising chime: 'I'm listening, go ahead.'"""
     _chime(660, 990, 0.6)
+
+def think_tick():
+    """A soft, short tick: 'I heard you, I'm thinking.' Played before a slower LLM answer."""
+    _chime(620, 620, 0.12)
 
 
 def sleep_chime():
@@ -506,7 +527,7 @@ def think(messages):
         "stream": False,
         "keep_alive": "30m",
         "logprobs": True,
-        "options": {"temperature": 0, "num_predict": 80, "num_ctx": NUM_CTX},
+        "options": {"temperature": 0, "num_predict": 60, "num_ctx": NUM_CTX},
     }, timeout=120)
     if response.status_code != 200:
         print("⚠️ Ollama says:", response.text)
@@ -595,7 +616,7 @@ def detect_guest(lower, user):
 def for_speech(text):
     """LLM replies are spoken: turn bullet lists into one sentence and drop markdown symbols."""
     lines = [l for l in text.splitlines() if l.strip()]
-    bullets = [BULLET.sub("", l).strip() for l in lines if BULLET.match(l)]
+    bullets = [BULLET.sub("", l).strip().rstrip(".") for l in lines if BULLET.match(l)]   
     others = [l.strip() for l in lines if not BULLET.match(l)]
     if bullets:
         text = " ".join(others[:1] + [", ".join(bullets) + "."] + others[1:])
@@ -655,15 +676,76 @@ def handle_command(text, memory, history, reminders):
         say(reminder_reply, "⏰ reminders (on device)")
         return True
 
-    # "add milk, eggs and bread to my grocery list" -> three separate items
-    m = re.match(r"(?:add|put)\s+(.+?)\s+(?:to|on|in)\s+(?:my\s+|the\s+)?(.+?)\s*list$", lower)
-    if m and re.search(r",|\band\b", m.group(1)):
-        items = [i.strip() for i in re.split(r",|\band\b", m.group(1)) if i.strip()]
-        for item in items:
-            handle_list_command(f"add {item} to my {m.group(2)} list", memory)
-        names = ", ".join(items[:-1]) + " and " + items[-1]
-        say(f"Added {names} to your {m.group(2)} list.", "📝 lists (on device)")
+    # ----- Lists: add (no duplicates), remove (every match), show (counted), "what's left?" -----
+    global _last_list
+
+    def list_name(said):
+        said = " ".join(said.split())
+        n = said[:-3] + "y" if said.endswith("ies") else said[:-1] if said.endswith("s") and not said.endswith("ss") else said
+        n = {"shopping": "grocery"}.get(n, n)
+        return n
+
+    def items_of(said):
+        parts = [re.sub(r"^(?:a|an|the|some|few|\d+|one|two|three)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
+        return [p for p in parts if p]
+
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)\s*list$", lower)
+    if m:
+        name, items = list_name(m.group(2)), items_of(m.group(1))
+        have = [i.lower() for i in memory.list_get(name)]
+        new = [i for i in items if i.lower() not in have]
+        for item in new:
+            memory.list_add(name, item)
+        _last_list = name
+        already = [i for i in items if i not in new]
+        parts = []
+        if new:
+            parts.append(f"Added {', '.join(new[:-1]) + ' and ' + new[-1] if len(new) > 1 else new[0]} to your {name} list.")
+        if already:
+            names_ = ", ".join(already[:-1]) + " and " + already[-1] if len(already) > 1 else already[0]
+            parts.append(f"{names_} {'is' if len(already) == 1 else 'are'} already there.")
+
+        say(" ".join(parts), "📝 lists (on device)")
         return True
+
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:remove|delete|take off|cross off)\s+(?:all\s+(?:the\s+)?)?(.+?)"
+                 r"\s+from\s+(?:my\s+|the\s+)?([a-z ]+?)\s*list(?:\s+(?:too|as well))?$", lower)
+    if m:
+        name = list_name(m.group(2))
+        _last_list = name
+        done, missing = [], []
+        for item in items_of(m.group(1)):
+            count = 0
+            while memory.list_remove(name, item):
+                count += 1
+            (done if count else missing).append(item)
+        parts = []
+        if done:
+            parts.append(f"Removed {', '.join(done)} from your {name} list.")
+        if missing:
+            left = memory.list_get(name)
+            parts.append(f"I couldn't find {', '.join(missing)}. " +
+                         (f"Your list has: {', '.join(dict.fromkeys(left))}." if left else "The list is empty."))
+        say(" ".join(parts), "📝 lists (on device)")
+        return True
+
+    m = re.search(r"\bwhat(?:'s| is) (?:on|in) (?:my\s+|the\s+)?([a-z ]+?)\s*list\b"
+                  r"|\b(?:show|display|read)(?: me)? (?:my\s+|the\s+)?([a-z ]+?)\s*list\b", lower)
+    left_q = re.search(r"\bwhat(?:'s| is) (?:left|remaining|on it)\b", lower) and _last_list
+    if m or left_q:
+        name = list_name(m.group(1) or m.group(2)) if m else _last_list
+        _last_list = name
+        items = memory.list_get(name)
+        if not items:
+            say(f"Your {name} list is empty.", "📝 lists (on device)")
+            return True
+        counts = {}
+        for i in items:
+            counts[i.lower()] = counts.get(i.lower(), 0) + 1
+        shown = [f"{i} ({c})" if c > 1 else i for i, c in counts.items()]
+        say(f"Your {name} list has: {', '.join(shown)}.", "📝 lists (on device)")
+        return True
+    
 
     list_reply = handle_list_command(text, memory)
     if list_reply:
@@ -804,7 +886,7 @@ def handle_command(text, memory, history, reminders):
 
 # ---------- Main loop ----------
 def main():
-    global _greeting, _pending_name, _guest
+    global _greeting, _pending_name, _guest, _offer_remember,_last_list
     dashboard.start()
     t0 = time.time()
 
@@ -1124,6 +1206,65 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False
             continue
 
+        # Kind words get a warm, honest reply (never "I'm just a computer program")
+        if re.search(r"\bi love you\b|\byou(?:'re| are) my best friend\b", text.lower()):
+            say("That's really sweet, thank you. I'm glad I can be part of your day. "
+                "And I hope you have people around you who make you feel loved too.", "💛 kind words", tone="gentle")
+            continue
+        if re.search(r"\byou(?:'re| are) (?:so |very |really )?(?:good|great|amazing|awesome|the best|helpful|sweet|smart|a good \w+)\b"
+                     r"|\b(?:good job|well done|nice work|you rock)\b|\bcompliments?\b", text.lower()):
+            say(random.choice(["Aww, that made my day!", "Thank you, that means a lot!",
+                               "That's so kind of you. I'm happy to help!"]), "💛 kind words", tone="bright")
+            continue
+
+
+        # "I love badminton and music" -> offer to remember it (only with a yes)
+        if _offer_remember:
+            liked, _offer_remember = _offer_remember, None
+            if re.match(r"(?:yes|yeah|yep|sure|ok|okay|please)\b", text.lower()):
+                memory.add(f"I love {liked} (saved on {date.today():%A, %d %B %Y})")
+                say("Saved. I'll remember that.", "💾 saved to memory", tone="bright")
+                continue
+            if re.match(r"(?:no|nope|don't)\b", text.lower()):
+                say("Okay, I won't save it.", "💾 not saved")
+                continue
+        m = re.match(r"^(?:i|i really|i also) (?:love|like|enjoy|adore)\s+(?!you\b)(.{3,80})$", text.lower().strip(" .!"))
+        if m and not is_unsafe(m.group(1)):
+            _offer_remember = m.group(1)
+            say(f"That's lovely! Should I remember that you love {_offer_remember}?", "💾 remember?", tone="bright")
+            continue
+
+
+        # Never invent facts about the user: questions about their likes/life with nothing saved get an honest answer
+        user = memory.get_setting("user_name") or ""
+        names = r"my|i|me" + (f"|{re.escape(user.lower())}" if user else "")
+        asks_about_user = (re.search(rf"\b(?:{names})\b", text.lower()) and re.search(
+            r"\b(?:likes?|loves?|hobb\w*|favou?rite|enjoys?|prefers?|interests?|birthday|allerg\w*)\b", text.lower()))
+        if asks_about_user and not re.match(r"^(?:i|i really|i also) (?:love|like|enjoy)", text.lower()):
+            if _guest:
+                say(f"That's {user}'s private information, so I'll keep it for them.", "🔒 guest mode: kept private")
+                continue
+            # Likes and hobbies: read them straight from memory (meaning-search can miss "what do I like")
+            if re.search(r"\b(?:likes?|loves?|hobb\w*|enjoys?|favou?rite|interests?)\b", text.lower()):
+                third = user and re.search(rf"\b{re.escape(user.lower())}\b", text.lower())
+                prefs = []
+                for t in memory.all():
+                    core = re.sub(r"\s*\[date:.*?\]", "", t.split(" (saved on")[0]).strip().rstrip(".")
+                    m = re.match(r"^i (?:really |also )?(love|like|enjoy|adore) (.+)$", core, re.I)
+                    if m:
+                        verb = m.group(1).lower()
+                        prefs.append(f"{user} {verb}s {m.group(2)}" if third else f"you {verb} {m.group(2)}")
+                    elif re.match(r"^my (?:favou?rite|hobb)", core, re.I):
+                        prefs.append(re.sub(r"^my\b", f"{user}'s" if third else "your", core, flags=re.I))
+                if prefs:
+                    joined = prefs[0] if len(prefs) == 1 else "; ".join(prefs[:-1]) + "; and " + prefs[-1]
+                    say(joined[0].upper() + joined[1:] + ".", "📚 memory (on device)", tone="bright")
+                    continue
+            if not memory.search(text):
+                say("I don't have that saved yet. You can tell me, for example: remember that I love badminton.",
+                    "📚 memory (nothing saved)")
+                continue
+
         # 4. Gate -> LLM router -> validated tool (lists or internet)
         found = [] if _guest else memory.search(text)      # a guest never gets the user's memories
         score, category = gate(text, example_vecs)
@@ -1161,9 +1302,19 @@ def main():
         messages.append(context_message(memory))
         messages.append({"role": "user", "content": text})
 
+        think_tick()
         start = time.time()
         reply, confidence = think(messages)
         reply = for_speech(reply)
+        # Stay in character: drop "I'm just a computer program" / "I don't feel emotions" sentences
+        kept = [s for s in re.split(r"(?<=[.!?])\s+", reply)
+                if not re.search(r"computer program|don'?t (?:feel|have) (?:any )?emotions|as an ai|language model", s.lower())]
+        reply = " ".join(kept) or "I'm Jarvis, right here with you."
+        # A reply cut off mid-sentence: keep only the complete sentences
+        if reply and reply[-1] not in ".!?":
+            cut = max(reply.rfind(". "), reply.rfind("! "), reply.rfind("? "))
+            if cut > 20:
+                reply = reply[:cut + 1]
         recent = [m["content"] for m in history if m["role"] == "assistant"][-2:]
         if reply in recent:                                 # stuck in a loop: start the chat fresh
             print(f"   (repeated reply, resetting chat: {reply})")
@@ -1200,17 +1351,17 @@ def main():
             r"|clear|delete|cancel|change|update|adjust|fix))"
             r"|\b(added|removed|saved|scheduled|noted)\b",
             reply.lower())
-        if promise and not declined and not route_name.startswith("🤔"):   # our own "not sure" lines are honest
+        negated = re.search(r"\b(?:haven'?t|have not|didn'?t|did not|never|can'?t|cannot)\b", reply.lower())
+        if promise and not declined and not negated and not route_name.startswith("🤔"):
             print(f"   (blocked false promise: {reply})")
             reply = "I can't do that yet, sorry. Ask me what I can do, and I'll tell you."
             route_name = "🛡️ false promise blocked"
 
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
-        history = history[:1] + history[-6:]   # keep only recent turns, stays fast
+        history = history[:1] + history[-4:]   # the last 2 exchanges are enough, and much faster
         tone = "gentle" if route_name.startswith(("🤔", "🛡️")) else "calm"
         say(reply, route_name, round(confidence, 2), tone)
-
 
 if __name__ == "__main__":
     try:

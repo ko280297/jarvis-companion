@@ -7,7 +7,8 @@ import time
 from difflib import SequenceMatcher
 
 EXIT = re.compile(
-    r"\b(?:stop|quit|exit|end|close)\b.*\b(?:game|games|quiz|playing|math)\b|\bi(?:'m| am) done playing\b")
+    r"\b(?:stop|quit|exit|end|close)\b.*\b(?:game|games|quiz|playing|math)\b|\bi(?:'m| am) done playing\b"
+    r"|^(?:stop|quit|exit|enough)\b|\bend this\b|\bnot interested\b|\bsaying stop\b|\bstop it\b")
 LIST_GAMES = re.compile(r"\b(?:what|which) games\b|\bgames? (?:can|do) you\b")
 PLAY = re.compile(r"\b(?:play|game|let'?s do|start|begin)\b")
 PLAY_AGAIN = re.compile(r"\b(?:play|go) (?:it |that )?again\b|\bone more (?:time|game|round)\b")
@@ -189,7 +190,7 @@ class MemorySequence(Activity):
     PALETTE = ["red", "blue", "green", "yellow"]
     START_LENGTH = 3
     HEARD_AS = {   # what speech-to-text writes for each colour
-        "red": {"red", "read", "rad", "bread", "rid", "rat", "rit", "ret", "wed", "redd"},
+        "red": {"red", "read", "rad", "bread", "rid", "rat", "rit", "ret", "wed", "redd", "z", "zed"},
         "blue": {"blue", "blew", "bloo", "bleu", "blu", "glue"},
         "green": {"green", "greens", "grin", "grain"},
         "yellow": {"yellow", "yello", "yellows", "jello", "hello", "halo", "hallo", "yalo"},
@@ -238,7 +239,8 @@ class MemorySequence(Activity):
             MemorySequence.best = max(MemorySequence.best, done)
             answer = ", ".join(self.seq)
             score = f"You remembered {done} colours." if done else "Let's try again soon."
-            return f"Game over! It was {answer}. {score} Your best is {MemorySequence.best}.", True
+            best = f" Your best is {MemorySequence.best}." if MemorySequence.best else ""
+            return f"Game over! It was {answer}. {score}{best}", True
         if n < len(self.seq):                                # right so far, they paused
             return "Good so far. Keep going.", False
         self.seq.append(random.choice(self.PALETTE))         # whole pattern right: one more colour

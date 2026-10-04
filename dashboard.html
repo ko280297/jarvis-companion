@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Private Companion · Dashboard</title>
+    <title>Jarvis · Private Companion</title>
     <style>
       :root {
         --bg: #0f1115;
@@ -16,6 +16,8 @@
         --blue: #4da3ff;
         --red: #ff5d5d;
         --grey: #5b6275;
+        --eye: #8ff0d2;
+        --eye-glow: rgba(143, 240, 210, 0.5);
       }
       * {
         box-sizing: border-box;
@@ -133,6 +135,271 @@
       .blocked {
         color: var(--red);
       }
+
+      /* Kiosk (the device's own touch screen): only the face, cards and banners */
+      .kiosk .details,
+      .kiosk .header {
+        display: none;
+      }
+      .kiosk {
+        padding: 12px;
+      }
+
+      /* ---------- Jarvis's face ---------- */
+      .face-wrap {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+      }
+      .kiosk .face-wrap {
+        min-height: 92vh;
+      }
+      .clock {
+        font-size: 20px;
+        color: var(--muted);
+        letter-spacing: 0.08em;
+        margin-bottom: 28px;
+        text-align: center;
+      }
+      .clock b {
+        display: block;
+        font-size: 44px;
+        color: var(--text);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .face {
+        position: relative;
+        width: 360px;
+        height: 280px;
+        cursor: pointer;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .head {
+        animation: breathe 4.5s ease-in-out infinite;
+      } /* gentle "alive" movement */
+      @keyframes breathe {
+        50% {
+          transform: translateY(-6px) scale(1.015);
+        }
+      }
+      .eyes {
+        display: flex;
+        justify-content: center;
+        gap: 74px;
+        margin-top: 34px;
+        transition: transform 0.6s ease;
+      }
+      .eye {
+        position: relative;
+        width: 96px;
+        height: 132px;
+        border-radius: 48px;
+        background: radial-gradient(
+          circle at 35% 30%,
+          #d6fff3,
+          var(--eye) 55%,
+          #5fd0ad
+        );
+        box-shadow: 0 0 34px var(--eye-glow);
+        transition:
+          height 0.16s ease,
+          width 0.25s,
+          border-radius 0.25s,
+          box-shadow 0.3s,
+          border 0.3s;
+      }
+      .eye::after {
+        content: "";
+        position: absolute;
+        top: 20px;
+        left: 22px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.9);
+        transition: opacity 0.15s;
+      } /* the sparkle */
+      .face.blink .eye {
+        height: 10px;
+      }
+      .face.blink .eye::after,
+      .face.sleep .eye::after,
+      .face.happy .eye::after {
+        opacity: 0;
+      }
+      .face.listen .eye {
+        width: 108px;
+        height: 150px;
+        box-shadow: 0 0 56px var(--eye-glow);
+      }
+      .face.think .eyes {
+        transform: translate(24px, -18px) !important;
+      }
+      .face.think .eye {
+        height: 112px;
+      }
+      .face.sleep .eye {
+        height: 10px;
+        border-radius: 6px;
+        box-shadow: 0 0 14px var(--eye-glow);
+      }
+      .face.gentle .eye {
+        height: 100px;
+        border-radius: 48px 48px 38px 38px;
+      }
+      .face.happy .eye {
+        height: 58px;
+        background: transparent;
+        border: 14px solid var(--eye);
+        border-bottom: none;
+        border-radius: 60px 60px 0 0;
+        box-shadow: none;
+      }
+      .cheeks {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 168px;
+        display: flex;
+        justify-content: center;
+        gap: 170px;
+        opacity: 0;
+        transition: opacity 0.3s;
+        pointer-events: none;
+      }
+      .cheeks span {
+        width: 46px;
+        height: 18px;
+        border-radius: 50%;
+        background: #f7a1c4;
+        opacity: 0.55;
+      }
+      .face.happy .cheeks,
+      .face.gentle .cheeks {
+        opacity: 0.8;
+      }
+      .mouth {
+        width: 44px;
+        height: 16px;
+        margin: 26px auto 0;
+        border: 6px solid var(--eye);
+        border-top: none;
+        border-radius: 0 0 30px 30px;
+        transition: all 0.2s;
+        opacity: 0.9;
+      } /* a small smile */
+      .face.speak .mouth {
+        border: none;
+        background: var(--eye);
+        border-radius: 20px;
+        animation: talk 0.26s ease-in-out infinite alternate;
+      }
+      @keyframes talk {
+        from {
+          height: 8px;
+          width: 30px;
+        }
+        to {
+          height: 22px;
+          width: 40px;
+        }
+      }
+      .face.happy .mouth {
+        width: 58px;
+        height: 24px;
+        border-width: 7px;
+      }
+      .face.happy.speak .mouth {
+        border: none;
+      }
+      .face.sleep .mouth,
+      .face.think .mouth {
+        width: 20px;
+        height: 6px;
+        border: none;
+        background: var(--eye);
+        border-radius: 6px;
+      }
+      .face.gentle .mouth {
+        width: 34px;
+        height: 10px;
+      }
+      .dots {
+        display: none;
+        position: absolute;
+        top: -6px;
+        right: 26px;
+        font-size: 30px;
+        color: var(--eye);
+        letter-spacing: 6px;
+      }
+      .dots span {
+        animation: dot 1.2s infinite;
+        opacity: 0.2;
+      }
+      .dots span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .dots span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes dot {
+        30% {
+          opacity: 1;
+        }
+      }
+      .face.think .dots {
+        display: block;
+      }
+      .zz {
+        display: none;
+        position: absolute;
+        top: -4px;
+        right: 36px;
+        color: var(--muted);
+        font-size: 22px;
+        font-weight: 700;
+        animation: float 2.6s ease-in-out infinite;
+      }
+      @keyframes float {
+        0% {
+          transform: translateY(8px);
+          opacity: 0;
+        }
+        40% {
+          opacity: 1;
+        }
+        100% {
+          transform: translateY(-22px);
+          opacity: 0;
+        }
+      }
+      .face.sleep .zz {
+        display: block;
+      }
+      .face.wiggle {
+        animation: wiggle 0.5s ease;
+      }
+      @keyframes wiggle {
+        25% {
+          transform: rotate(-5deg) scale(1.03);
+        }
+        75% {
+          transform: rotate(5deg) scale(1.03);
+        }
+      }
+      .hint {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 15px;
+        min-height: 20px;
+      }
+
+      /* Emergency / first-aid banner */
       .sos {
         display: none;
         border-radius: 14px;
@@ -144,10 +411,18 @@
       .sos.calm {
         background: #2d4a7a;
       }
+      .sos.aid {
+        background: #1f6f5c;
+      }
       .sos-title {
         font-size: 22px;
         font-weight: 700;
         margin-bottom: 10px;
+      }
+      .sos-text {
+        font-size: 18px;
+        line-height: 1.5;
+        margin-bottom: 8px;
       }
       .sos-line {
         display: flex;
@@ -161,19 +436,13 @@
         font-weight: 800;
         letter-spacing: 2px;
       }
-      .sos.aid {
-        background: #1f6f5c;
-      }
-      .sos-text {
-        font-size: 18px;
-        line-height: 1.5;
-        margin-bottom: 8px;
-      }
       .sos-note {
         font-size: 13px;
         opacity: 0.8;
         margin-top: 8px;
       }
+
+      /* Activity card: wellbeing, focus, games, meeting */
       .act {
         display: none;
         border-color: #1f6f5c;
@@ -218,11 +487,11 @@
       }
       .side {
         transform-box: view-box;
-        transform-origin: 100px 85px; /* wings fold in towards the body */
+        transform-origin: 100px 85px;
         animation: flap 2.4s ease-in-out infinite;
       }
       .side.right {
-        animation-delay: -1.2s; /* right side taps half a beat after the left */
+        animation-delay: -1.2s;
       }
       @keyframes flap {
         0%,
@@ -257,14 +526,6 @@
         25% {
           color: #f7c6e0;
         }
-      }
-      .timer {
-        display: none;
-        font-size: 72px;
-        font-weight: 800;
-        letter-spacing: 3px;
-        margin: 10px 0 4px;
-        font-variant-numeric: tabular-nums;
       }
       .orbs {
         display: none;
@@ -325,15 +586,37 @@
     </style>
   </head>
   <body>
-    <h1>🔒 Private Companion</h1>
-    <div class="sub">
-      All reasoning happens on this device. Only the calls listed below ever
-      touched the internet.
+    <div class="header">
+      <h1>🔒 Jarvis · Private Companion</h1>
+      <div class="sub">
+        All reasoning happens on this device. Only the calls listed below ever
+        touched the internet.
+      </div>
     </div>
+
     <div id="sos" class="sos">
       <div class="sos-title" id="sos-title"></div>
       <div id="sos-lines"></div>
     </div>
+
+    <!-- Jarvis's face: shown whenever there's no banner or activity -->
+    <div id="faceWrap" class="face-wrap">
+      <div class="clock" id="clock"></div>
+      <div id="face" class="face idle" title="Tap me!">
+        <div class="dots"><span>•</span><span>•</span><span>•</span></div>
+        <div class="zz">z z Z</div>
+        <div class="head">
+          <div class="eyes" id="eyes">
+            <div class="eye"></div>
+            <div class="eye"></div>
+          </div>
+          <div class="cheeks"><span></span><span></span></div>
+          <div class="mouth"></div>
+        </div>
+      </div>
+      <div class="hint" id="hint">Say “Hey Jarvis”</div>
+    </div>
+
     <div id="act" class="card act">
       <div class="act-title" id="act-title"></div>
       <div id="act-lines"></div>
@@ -375,7 +658,6 @@
               <use href="#wings" />
             </g>
           </g>
-          <!-- body, head and antennae stay still -->
           <ellipse cx="100" cy="88" rx="5" ry="34" fill="#5b3f8c" />
           <circle cx="100" cy="51" r="7" fill="#5b3f8c" />
           <path
@@ -400,55 +682,58 @@
         <span class="tap-l">left</span> · <span class="tap-r">right</span>
       </div>
     </div>
-    <div class="grid">
-      <div class="card">
-        <div class="label">Device</div>
-        <div class="status">
-          <span id="dot" class="dot"></span><span id="status">…</span>
+
+    <div class="details">
+      <div class="grid">
+        <div class="card">
+          <div class="label">Device</div>
+          <div class="status">
+            <span id="dot" class="dot"></span><span id="status">…</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="label">Saved memories (on device)</div>
+          <div class="big" id="memories">–</div>
+        </div>
+        <div class="card">
+          <div class="label">Internet calls</div>
+          <div class="big" id="calls">–</div>
+          <div class="sub" id="callsub"></div>
         </div>
       </div>
-      <div class="card">
-        <div class="label">Saved memories (on device)</div>
-        <div class="big" id="memories">–</div>
-      </div>
-      <div class="card">
-        <div class="label">Internet calls</div>
-        <div class="big" id="calls">–</div>
-        <div class="sub" id="callsub"></div>
-      </div>
-    </div>
 
-    <div class="grid">
-      <div class="card">
-        <div class="label">Last heard</div>
-        <div class="text" id="heard">—</div>
-      </div>
-      <div class="card">
-        <div class="label">Answer</div>
-        <div class="text" id="reply">—</div>
-        <span class="pill" id="route">—</span>
-        <div id="confwrap" style="display: none; margin-top: 14px">
-          <div class="label">Model confidence: <span id="conf"></span></div>
-          <div class="bar"><div id="confbar"></div></div>
+      <div class="grid">
+        <div class="card">
+          <div class="label">Last heard</div>
+          <div class="text" id="heard">—</div>
+        </div>
+        <div class="card">
+          <div class="label">Answer</div>
+          <div class="text" id="reply">—</div>
+          <span class="pill" id="route">—</span>
+          <div id="confwrap" style="display: none; margin-top: 14px">
+            <div class="label">Model confidence: <span id="conf"></span></div>
+            <div class="bar"><div id="confbar"></div></div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="label">Internet log (newest first)</div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Tool</th>
-              <th>What left the device</th>
-              <th>Where</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody id="log"></tbody>
-        </table>
+      <div class="card">
+        <div class="label">Internet log (newest first)</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Tool</th>
+                <th>What left the device</th>
+                <th>Where</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="log"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -467,20 +752,191 @@
         speaking: "Speaking",
         starting: "Starting…",
       };
-      const esc = (s) =>
-        String(s ?? "").replace(
-          /[&<>]/g,
-          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
-        );
-      const $ = (id) => document.getElementById(id);
-
-      let lastBreath = null;
       const ORB = {
         red: "#ef4444",
         blue: "#3b82f6",
         green: "#22c55e",
         yellow: "#eab308",
       };
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        );
+      const $ = (id) => document.getElementById(id);
+      if (location.search.includes("kiosk"))
+        document.body.classList.add("kiosk");
+      let lastBreath = null;
+
+      // ---------- Jarvis's face ----------
+      const MOODS = [
+        "idle",
+        "listen",
+        "think",
+        "speak",
+        "sleep",
+        "happy",
+        "gentle",
+      ];
+      let lastStatus = "",
+        idleSince = Date.now(),
+        tapUntil = 0,
+        mood = "idle";
+      const TAP_HINTS = ["Hehe! 😊", "That tickles!", "Hi there!", "I'm here!"];
+
+      function faceMoods(s) {
+        if (Date.now() < tapUntil) return ["happy"];
+        if (s.status === "listening") return ["listen"];
+        if (s.status === "thinking") return ["think"];
+        if (s.status === "speaking") {
+          if (s.tone === "bright") return ["happy", "speak"];
+          if (s.tone === "gentle") return ["gentle", "speak"];
+          return ["speak"];
+        }
+        const hour = new Date().getHours();
+        if (Date.now() - idleSince > 5 * 60 * 1000 || hour >= 23 || hour < 6)
+          return ["sleep"];
+        return ["idle"];
+      }
+
+      function showFace(s, visible) {
+        $("faceWrap").style.display = visible ? "flex" : "none";
+        if (!visible) return;
+        if (s.status !== lastStatus) {
+          lastStatus = s.status;
+          idleSince = Date.now();
+        }
+        const moods = faceMoods(s);
+        mood = moods[0];
+        MOODS.forEach((m) => $("face").classList.toggle(m, moods.includes(m)));
+        if (mood !== "idle") $("eyes").style.transform = "";
+        const now = new Date();
+        $("clock").innerHTML =
+          `<b>${now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</b>` +
+          now.toLocaleDateString([], {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+          });
+        if (Date.now() >= tapUntil) {
+          $("hint").textContent =
+            mood === "sleep"
+              ? "Shh… say “Hey Jarvis” to wake me"
+              : mood === "listen"
+                ? "I'm listening…"
+                : mood === "think"
+                  ? "Thinking, right here on this device"
+                  : s.status === "speaking"
+                    ? ""
+                    : "Say “Hey Jarvis”";
+        }
+      }
+
+      function blink() {
+        // a natural blink every few seconds
+        if (["idle", "listen", "gentle"].includes(mood)) {
+          $("face").classList.add("blink");
+          setTimeout(() => $("face").classList.remove("blink"), 140);
+        }
+        setTimeout(blink, 2500 + Math.random() * 3500);
+      }
+      function lookAround() {
+        // now and then, glance somewhere
+        if (mood === "idle") {
+          const x = Math.round((Math.random() - 0.5) * 40),
+            y = Math.round((Math.random() - 0.5) * 12);
+          $("eyes").style.transform = `translate(${x}px, ${y}px)`;
+          setTimeout(() => {
+            if (mood === "idle") $("eyes").style.transform = "";
+          }, 1300);
+        }
+        setTimeout(lookAround, 4000 + Math.random() * 4000);
+      }
+      $("face").addEventListener("click", () => {
+        // tap the face: Jarvis is happy to see you
+        tapUntil = Date.now() + 1800;
+        idleSince = Date.now();
+        $("face").classList.remove("wiggle");
+        void $("face").offsetWidth;
+        $("face").classList.add("wiggle");
+        $("hint").textContent =
+          TAP_HINTS[Math.floor(Math.random() * TAP_HINTS.length)];
+      });
+      setTimeout(blink, 2000);
+      setTimeout(lookAround, 5000);
+
+      // ---------- Banners and activity cards ----------
+      function showBanner(e) {
+        $("sos").style.display = e ? "block" : "none";
+        if (!e) return;
+        $("sos").className =
+          "sos" +
+          (e.kind === "crisis"
+            ? " calm"
+            : e.kind === "first_aid"
+              ? " aid"
+              : "");
+        $("sos-title").textContent = e.title;
+        $("sos-lines").innerHTML =
+          (e.text ? `<div class="sos-text">${esc(e.text)}</div>` : "") +
+          (e.lines || [])
+            .map(
+              (l) =>
+                `<div class="sos-line"><span>${esc(l[0])}</span><span class="sos-num">${esc(l[1])}</span></div>`,
+            )
+            .join("") +
+          (e.note ? `<div class="sos-note">${esc(e.note)}</div>` : "");
+      }
+
+      function showActivity(a) {
+        $("act").style.display = a ? "block" : "none";
+        if (!a) return;
+        $("act-title").textContent = a.title;
+        $("act-lines").innerHTML = (a.lines || [])
+          .map((l) => `<div class="act-line">${esc(l)}</div>`)
+          .join("");
+        const tm = a.timer;
+        $("timer").style.display = tm ? "block" : "none";
+        if (tm) {
+          const left =
+            tm.left != null
+              ? tm.left
+              : Math.max(0, tm.ends - Date.now() / 1000);
+          $("timer").textContent =
+            `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
+        }
+        $("orbs").style.display = a.orbs ? "flex" : "none";
+        if (a.orbs) {
+          $("orbs").innerHTML = a.orbs
+            .map(
+              (c) =>
+                `<div class="orb${a.flash === c ? " lit" : ""}" style="background:${ORB[c]};color:${ORB[c]}"></div>`,
+            )
+            .join("");
+        }
+        $("board").style.display = a.board ? "grid" : "none";
+        if (a.board) {
+          $("board").innerHTML = a.board
+            .map(
+              (v, i) =>
+                `<div class="cell ${v ? v.toLowerCase() : ""}${(a.win || []).includes(i) ? " win" : ""}">` +
+                `<span class="num">${i + 1}</span>${esc(v)}</div>`,
+            )
+            .join("");
+        }
+        const b = a.breath;
+        $("breath").style.display = b ? "block" : "none";
+        if (b && b.id !== lastBreath) {
+          lastBreath = b.id;
+          $("breath").style.transitionDuration = b.seconds + "s";
+          if (b.phase === "in") $("breath").style.transform = "scale(1)";
+          if (b.phase === "out") $("breath").style.transform = "scale(0.55)";
+        }
+        const hug = a.anim === "butterfly";
+        $("hug").style.display = hug ? "flex" : "none";
+        $("hug-caption").style.display = hug ? "block" : "none";
+      }
+
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();
@@ -491,81 +947,14 @@
           );
           $("status").textContent = LABELS[s.status] || s.status;
           $("memories").textContent = s.memories;
-          const e = s.emergency;
-          $("sos").style.display = e ? "block" : "none";
-          if (e) {
-            $("sos").className =
-              "sos" +
-              (e.kind === "crisis"
-                ? " calm"
-                : e.kind === "first_aid"
-                  ? " aid"
-                  : "");
-            $("sos-title").textContent = e.title;
-            $("sos-lines").innerHTML =
-              (e.text ? `<div class="sos-text">${esc(e.text)}</div>` : "") +
-              (e.lines || [])
-                .map(
-                  (l) =>
-                    `<div class="sos-line"><span>${esc(l[0])}</span><span class="sos-num">${esc(l[1])}</span></div>`,
-                )
-                .join("") +
-              (e.note ? `<div class="sos-note">${esc(e.note)}</div>` : "");
-          }
+          showBanner(s.emergency);
           const a =
             s.activity &&
             !(s.activity.expires && s.activity.expires < Date.now() / 1000)
               ? s.activity
               : null;
-          $("act").style.display = a ? "block" : "none";
-          if (a) {
-            $("act-title").textContent = a.title;
-            $("act-lines").innerHTML = (a.lines || [])
-              .map((l) => `<div class="act-line">${esc(l)}</div>`)
-              .join("");
-          }
-          const tm = a && a.timer;
-          $("timer").style.display = tm ? "block" : "none";
-          if (tm) {
-            const left =
-              tm.left != null
-                ? tm.left
-                : Math.max(0, tm.ends - Date.now() / 1000);
-            $("timer").textContent =
-              `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
-          }
-          const orbs = a && a.orbs;
-          $("orbs").style.display = orbs ? "flex" : "none";
-          if (orbs) {
-            $("orbs").innerHTML = orbs
-              .map(
-                (c) =>
-                  `<div class="orb${a.flash === c ? " lit" : ""}" style="background:${ORB[c]};color:${ORB[c]}"></div>`,
-              )
-              .join("");
-          }
-          const bd = a && a.board;
-          $("board").style.display = bd ? "grid" : "none";
-          if (bd) {
-            $("board").innerHTML = bd
-              .map(
-                (v, i) =>
-                  `<div class="cell ${v ? v.toLowerCase() : ""}${(a.win || []).includes(i) ? " win" : ""}">` +
-                  `<span class="num">${i + 1}</span>${v}</div>`,
-              )
-              .join("");
-          }
-          const b = a && a.breath;
-          $("breath").style.display = b ? "block" : "none";
-          if (b && b.id !== lastBreath) {
-            lastBreath = b.id;
-            $("breath").style.transitionDuration = b.seconds + "s";
-            if (b.phase === "in") $("breath").style.transform = "scale(1)";
-            if (b.phase === "out") $("breath").style.transform = "scale(0.55)";
-          }
-          const hug = a && a.anim === "butterfly";
-          $("hug").style.display = hug ? "flex" : "none";
-          $("hug-caption").style.display = hug ? "block" : "none";
+          showActivity(a);
+          showFace(s, !s.emergency && !a);
           $("heard").textContent = s.last_heard || "—";
           $("reply").textContent = s.last_reply || "—";
           $("route").textContent = s.route || "—";
