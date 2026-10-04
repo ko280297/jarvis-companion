@@ -1154,7 +1154,7 @@ def main():
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
         if not found and not declined and is_question and not about_assistant and confidence < CONFIDENCE_THRESHOLD:
             print(f"   (withheld guess: {reply})")
-                        if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
+            if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."
             else:
                 reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
@@ -1167,7 +1167,7 @@ def main():
             r"|clear|delete|cancel|change|update|adjust|fix))"
             r"|\b(added|removed|saved|scheduled|noted)\b",
             reply.lower())
-        if promise and not declined:
+        if promise and not declined and not route_name.startswith("🤔"):   # our own "not sure" lines are honest
             print(f"   (blocked false promise: {reply})")
             reply = "I can't do that yet, sorry. Ask me what I can do, and I'll tell you."
             route_name = "🛡️ false promise blocked"

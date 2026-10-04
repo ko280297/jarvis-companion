@@ -1,0 +1,265 @@
+⌨️  Text mode: type what you'd say. Ctrl + C to stop.
+   (timers and reminders are checked after each line you type)
+📊 Dashboard: http://localhost:8000
+Loading models...
+   ✔ wake word  (0.2s)
+   ✔ speech to text  (0.5s)
+   ✔ memory, reminders, voice  (0.5s)
+   ✔ intent gate  (3.9s)
+Ready! (3.9s)
+
+⌨️  You> what time is it
+You: what time is it
+🔊 Jarvis: It is 1:15 PM.
+
+⌨️  You> my name is Krati
+You: my name is Krati
+🔊 Jarvis: Of course, Krati! Sorry about that.
+
+⌨️  You> what's my name
+You: what's my name
+🔊 Jarvis: You're Krati.
+
+⌨️  You> remember that my keys are in the blue drawer
+You: remember that my keys are in the blue drawer
+💾 Saved: my keys are in the blue drawer (saved on Sunday, 04 October 2026)
+🔊 Jarvis: Okay, I'll remember that.
+
+⌨️  You> where are my keys
+You: where are my keys
+🚦 Gate: 0.24 (lists)
+📚 Using memory:
+- my keys are in the blue drawer (saved on Sunday, 04 October 2026)
+🤔 Confidence: 0.91  (9.8s)
+🔊 Jarvis: Your keys are in the blue drawer.
+
+⌨️  You> forget that
+You: forget that
+🗑️ Forgot: my keys are in the blue drawer (saved on Sunday, 04 October 2026)
+🔊 Jarvis: Done, I've forgotten it.
+
+⌨️  You> where are my keys
+You: where are my keys
+🚦 Gate: 0.24 (lists)
+🤔 Confidence: 0.53  (3.4s)
+   (withheld guess: check the usual places: the kitchen, the car, and the desk.)
+🔊 Jarvis: I don't have that saved. You can tell me, and I'll remember it.
+
+⌨️  You> this is my friend Rhea
+You: this is my friend Rhea
+🙂 Remembered: my friend is Rhea
+🔊 Jarvis: Nice to meet you, Rhea! I'll remember that.
+
+⌨️  You> who are my friends
+You: who are my friends
+🔊 Jarvis: Your friends are Shubhangi and Rhea.
+
+⌨️  You> add milk and eggs to my grocery list
+You: add milk and eggs to my grocery list
+🔊 Jarvis: Added milk and eggs to your grocery list.
+
+⌨️  You> what's on my grocery list
+You: what's on my grocery list
+🔊 Jarvis: Your grocery list has 8 items: eggs; milk; bread; knife; Ad Magi; eggs; milk; eggs.
+   (conversation limit reached: say 'Hey Jarvis' to continue)
+
+⌨️  You> remove milk from my grocery list
+You: remove milk from my grocery list
+🔊 Jarvis: Removed it from your grocery list.
+
+⌨️  You> remind me in 10 minutes to stretch
+You: remind me in 10 minutes to stretch
+🔊 Jarvis: Okay, I'll remind you: stretch, in 10 minutes.
+
+⌨️  You> what reminders do I have
+You: what reminders do I have
+🔊 Jarvis: You have 1: stretch, in 10 minutes.
+
+⌨️  You> cancel all reminders
+You: cancel all reminders
+🔊 Jarvis: Cancelled 1 reminder.
+
+⌨️  You> what's the date next sunday
+You: what's the date next sunday
+🔊 Jarvis: Next Sunday is Sunday, 11 October 2026.
+
+⌨️  You> what's my day
+You: what's my day
+🌐 ONLINE ✅ → geocoding-api.open-meteo.com | sent: 'Pune' | ok
+🌐 ONLINE ✅ → api.open-meteo.com | sent: '18.52,73.86' | ok
+🔊 Jarvis: Good afternoon, Krati! It's Sunday, 4 October. You have no more reminders today. Your grocery list has 7 items. You've focused for 11 minutes today, across 7 sessions. In Pune, India it's 33 degrees right now, mainly clear. Chance of rain is 0 percent.
+
+⌨️  You> I'm Krati's friend Shubhangi
+You: I'm Krati's friend Shubhangi
+🔊 Jarvis: Hi Shubhangi, nice to meet you! I'll keep Krati's personal things private while we talk.
+
+⌨️  You> who are you talking to
+You: who are you talking to
+🔊 Jarvis: I'm talking to Shubhangi, Krati's guest.
+
+⌨️  You> what's my day
+You: what's my day
+🔊 Jarvis: That's Krati's private information, so I'll keep it for them. Is there anything else I can help with?
+
+⌨️  You> I'm Krati
+You: I'm Krati
+🔊 Jarvis: Welcome back, Krati!
+
+⌨️  You> who are you talking to
+You: who are you talking to
+🔊 Jarvis: I'm talking to you, Krati.
+   (conversation limit reached: say 'Hey Jarvis' to continue)
+
+⌨️  You> I sprained my ankle
+You: I sprained my ankle
+🔊 Jarvis: Oh no, I'm sorry. Rest it and try not to put weight on it. Put a cold pack wrapped in a cloth on it for 15 to 20 minutes every few hours, and keep it raised on a pillow. If you can't put any weight on it, or it looks badly swollen or out of shape, please get it checked by a doctor. Would you like me to tell you who you can call for help?
+
+⌨️  You> no
+You: no
+🔊 Jarvis: Okay. Take care, and tell me if it gets worse.
+
+⌨️  You> I fell and I can't move my leg
+You: I fell and I can't move my leg
+🔊 Jarvis: Okay, I'm here with you. If you're in danger, call 1 1 2 right now. Ambulance: 1 0 8. Your emergency contacts are Papa, 9 8 7 4 3, 2 1 0; and Dd, 9 1 2 3 4, 5 6 7 8 9. Should I repeat the numbers?
+
+⌨️  You> I'm okay
+You: I'm okay
+🔊 Jarvis: I'm glad you're okay. I'm here if you need me.
+
+⌨️  You> I have a fever, what should I do
+You: I have a fever, what should I do
+🔊 Jarvis: I'm sorry you're not feeling well. I can't give medical advice, but if it feels serious or keeps getting worse, please see a doctor, or call 1 0 8 in an emergency. Would you like me to tell you who you can call?
+
+⌨️  You> I'm feeling anxious
+You: I'm feeling anxious
+🔊 Jarvis: I'm here to help you feel better. Let's try something gentle together.
+🔊 Jarvis: We'll do a physiological sigh, three times. Two breaths in through your nose, then one long breath out.
+🔊 Jarvis: Well done. Notice how you feel now.
+🔊 Jarvis: Would you like to try a short grounding exercise too?
+
+⌨️  You> no
+You: no
+🔊 Jarvis: Okay. I'm here whenever you need me.
+
+⌨️  You> box breathing
+You: box breathing
+🔊 Jarvis: Let's do box breathing. In for 4, hold for 4, out for 4, and hold for 4.
+🔊 Jarvis: Well done. Notice how you feel now.
+
+⌨️  You> I need to vent
+You: I need to vent
+🔊 Jarvis: I'm here, and I'm listening. Take your time, I won't interrupt. When you're finished, just say: I'm done.
+
+⌨️  You> work has been really stressful lately
+You: work has been really stressful lately
+
+⌨️  You> I'm done
+You: I'm done
+🔊 Jarvis: Thank you for sharing that with me. Do you want me to keep it, or let it go?
+
+⌨️  You> let it go
+You: let it go
+🔊 Jarvis: Okay, it's gone. I hope you feel a little lighter.
+
+⌨️  You> start focus for 25 minutes on report
+You: start focus for 25 minutes on report
+🔊 Jarvis: Focus started on report: 25 minutes. I'll keep things quiet until your break.
+
+⌨️  You> how much time is left
+You: how much time is left
+🔊 Jarvis: 25 minutes left in focus.
+
+⌨️  You> note call the bank
+You: note call the bank
+🅿️ Parked: call the bank
+🔊 Jarvis: Noted. Back to your focus.
+
+⌨️  You> pause
+You: pause
+🔊 Jarvis: Paused. Say resume when you're ready.
+
+⌨️  You> resume
+You: resume
+🔊 Jarvis: Resumed. You've got this.
+
+⌨️  You> stop focus
+You: stop focus
+🔊 Jarvis: Okay, focus stopped.
+
+⌨️  You> how did I do today
+You: how did I do today
+🔊 Jarvis: Today you did 7 focus sessions, 11 minutes in total. You felt mostly tired.
+
+⌨️  You> let's play tic tac toe
+You: let's play tic tac toe
+🔊 Jarvis: Let's play tic tac toe, on medium! You're X and you go first. Say a number from 1 to 9, or a spot like top left.
+
+⌨️  You> 5
+You: 5
+🔊 Jarvis: I'll take 9, the bottom right. Your move.
+
+⌨️  You> top right
+You: top right
+🔊 Jarvis: I'll take 7, the bottom left. Your move.
+
+⌨️  You> stop the game
+You: stop the game
+🔊 Jarvis: Okay, we stopped Tic-tac-toe. That was fun!
+
+⌨️  You> let's play mental math
+You: let's play mental math
+🔊 Jarvis: Let's do 10 quick questions. Say repeat to hear one again, or skip to move on. Question 1. What's 7 plus 39?
+
+⌨️  You> skip
+You: skip
+🔊 Jarvis: It's 46. Question 2. What's 29 minus 23?
+
+⌨️  You> stop the game
+You: stop the game
+🔊 Jarvis: Okay, we stopped Mental math. That was fun!
+
+⌨️  You> let's play memory sequence
+You: let's play memory sequence
+🔊 Jarvis: Let's play memory sequence! Watch and listen, then say the colours back in order.
+   🧠 Pattern: green, red, green
+🔊 Jarvis: Now it's your turn.
+
+⌨️  You> stop the game
+You: stop the game
+🔊 Jarvis: Okay, we stopped Memory sequence. That was fun!
+
+⌨️  You> meeting mode on
+You: meeting mode on
+🔊 Jarvis: Meeting mode is on. I'll quietly listen for dates and tasks, and nothing is recorded. When you're done, just say: meeting mode off.
+   (loading the meeting speech model...)
+
+📝 meeting> Let's meet on Friday at 3 PM to review the slides. Rahul will send the report tomorrow.
+   📝 (meeting) Let's meet on Friday at 3 PM to review the slides. Rahul will send the report tomorrow.
+   📌 Noticed (event): Let's meet on Friday at 3 PM to review the slides.
+   📌 Noticed (task): Rahul will send the report tomorrow.
+
+📝 meeting> meeting mode off
+   📝 (meeting) meeting mode off
+🔊 Jarvis: Meeting mode is off. I noticed 2 things.
+🔊 Jarvis: I heard: Let's meet on Friday at 3 PM to review the slides. That's Friday, 9 October 2026. You already have Let's meet on Friday at 3 PM to review the slides. that day. Should I add it to your schedule?
+
+⌨️  You> yes
+You: yes
+🔊 Jarvis: Added to your schedule.
+🔊 Jarvis: I heard a task: Rahul will send the report tomorrow. Should I save it to your tasks?
+
+⌨️  You> no
+You: no
+🔊 Jarvis: Okay, skipped.
+🔊 Jarvis: That's everything. The rest of the meeting wasn't kept.
+
+⌨️  You> what can you do
+You: what can you do
+🔊 Jarvis: I can remember things for you, keep lists like groceries, ideas and your schedule, set reminders and timers, run focus sessions with healthy breaks, give you a summary of your day, tell you the date and time, play simple games, listen in meetings for dates and tasks, check the weather or news, guide you through calming exercises when you need a moment, and help you with the right numbers in an emergency. And if I'm not sure about something, I'll tell you instead of guessing.
+
+⌨️  You> goodbye
+You: goodbye
+🔊 Jarvis: Okay, talk soon!
+
+⌨️  You> 
+✅ Test script finished.
