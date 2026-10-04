@@ -1,0 +1,141 @@
+   (real memories backed up; the test will not change them)
+⌨️  Text mode: type what you'd say. Ctrl + C to stop.
+   (timers and reminders are checked after each line you type)
+📊 Dashboard: http://localhost:8000
+Loading models...
+   ✔ wake word  (0.1s)
+   ✔ speech to text  (0.4s)
+   ✔ memory, reminders, voice  (0.4s)
+   ✔ intent gate  (3.8s)
+Ready! (3.8s)
+
+⌨️  You> I have a free period after lunch
+You: I have a free period after lunch
+🚦 Gate: 0.33 (lists)
+🤔 Confidence: 0.77  (8.5s)
+🔊 Jarvis: That's great! What would you like to do next?
+
+⌨️  You> what is the time period of the Mughal empire
+You: what is the time period of the Mughal empire
+🚦 Gate: 0.06 (lists)
+🤔 Confidence: 0.77  (6.8s)
+   (withheld guess: The Mughal Empire was active from the 16th to the early 19th century.)
+🔊 Jarvis: Hmm, I'm not sure about that one. Want me to look it up online?
+
+⌨️  You> the trial period ends next week
+You: the trial period ends next week
+🚦 Gate: 0.31 (lists)
+🤔 Confidence: 0.56  (3.8s)
+🔊 Jarvis: That's coming up soon, isn't it? What are you planning to do then?
+
+⌨️  You> put a period at the end of the sentence
+You: put a period at the end of the sentence
+🚦 Gate: 0.20 (lists)
+🤔 Confidence: 0.71  (3.5s)
+   (blocked false promise: Got it, I'll add a period at the end.)
+🔊 Jarvis: I can't do that yet, sorry. Ask me what I can do, and I'll tell you.
+
+⌨️  You> I'll cycle to the office tomorrow
+You: I'll cycle to the office tomorrow
+🚦 Gate: 0.42 (lists)
+🤔 Confidence: 0.53  (3.8s)
+🔊 Jarvis: Good choice! Cycling is good for the environment and your health. See you there!
+
+⌨️  You> my cycle is broken, I need to fix the tyre
+You: my cycle is broken, I need to fix the tyre
+🚦 Gate: 0.18 (lists)
+🤔 Confidence: 0.42  (4.0s)
+🔊 Jarvis: That's a good idea. Fixing the tyre is a simple fix. If you need any help, just ask.
+
+⌨️  You> what is the water cycle
+You: what is the water cycle
+🚦 Gate: 0.22 (get_weather)
+🤔 Confidence: 0.55  (4.4s)
+   (withheld guess: The water cycle is like a big dance where water moves between the land, oceans, and sky. It's always happening, and it helps keep our planet clean and healthy.)
+🔊 Jarvis: Hmm, I'm not sure about that one. Want me to look it up online?
+
+⌨️  You> the washing machine cycle takes an hour
+You: the washing machine cycle takes an hour
+🚦 Gate: 0.17 (lists)
+🤔 Confidence: 0.44  (4.9s)
+🔊 Jarvis: That's a long time for a cycle. It's probably because the cycle is designed to clean clothes thoroughly. If you want to speed it up, you could try adding more water or using a dryer.
+
+⌨️  You> the period of a pendulum depends on its length
+You: the period of a pendulum depends on its length
+🚦 Gate: 0.02 (lists)
+🤔 Confidence: 0.77  (4.3s)
+🔊 Jarvis: Exactly right! The period of a pendulum is determined by its length. The longer the pendulum, the longer it takes to swing back and forth.
+
+⌨️  You> we had a long period of rain last month
+You: we had a long period of rain last month
+🚦 Gate: 0.43 (get_weather)
+🤔 Confidence: 0.46  (4.0s)
+🔊 Jarvis: That sounds like quite a wet month. It must have been quite challenging to keep the house dry.
+
+⌨️  You> I'm Krati's friend Shubhangi
+You: I'm Krati's friend Shubhangi
+🔊 Jarvis: Hi Shubhangi, nice to meet you! I'll keep Krati's personal things private while we talk.
+   (conversation limit reached: say 'Hey Jarvis' to continue)
+
+⌨️  You> what is the time period of the Mughal empire
+You: what is the time period of the Mughal empire
+🚦 Gate: 0.06 (lists)
+🤔 Confidence: 0.82  (3.6s)
+   (withheld guess: The Mughal Empire spanned from the 16th to the early 19th century.)
+🔊 Jarvis: Hmm, I'm not sure about that one. Want me to look it up online?
+
+⌨️  You> I'm Krati
+You: I'm Krati
+🔊 Jarvis: Welcome back, Krati!
+
+⌨️  You> my period started 30 days ago
+You: my period started 30 days ago
+🔊 Jarvis: Just to check: should I note your period as starting on Friday, 4 September?
+
+⌨️  You> yes
+You: yes
+🔊 Jarvis: Got it, I've noted it for Friday, 4 September. This stays only on this device.
+
+⌨️  You> my period started today
+You: my period started today
+🔊 Jarvis: Just to check: should I note your period as starting on Sunday, 4 October?
+
+⌨️  You> no
+You: no
+🔊 Jarvis: Okay, I won't note anything.
+
+⌨️  You> my period started today
+You: my period started today
+🔊 Jarvis: Just to check: should I note your period as starting on Sunday, 4 October?
+
+⌨️  You> yes
+You: yes
+🔊 Jarvis: Got it, I've noted it for Sunday, 4 October. This stays only on this device.
+
+⌨️  You> when is my next period
+You: when is my next period
+🔊 Jarvis: Based on your last 1 cycle, averaging 30 days, your next period may start around Tuesday, 3 November, give or take a few days. This is only an estimate, so please don't rely on it for birth control.
+
+⌨️  You> I'm Krati's friend Shubhangi
+You: I'm Krati's friend Shubhangi
+🔊 Jarvis: Hi Shubhangi, nice to meet you! I'll keep Krati's personal things private while we talk.
+
+⌨️  You> when is my next period
+You: when is my next period
+🔊 Jarvis: That's Krati's private information, so I'll keep it for them.
+
+⌨️  You> I'm Krati
+You: I'm Krati
+🔊 Jarvis: Welcome back, Krati!
+
+⌨️  You> when is my next period
+You: when is my next period
+🔊 Jarvis: Based on your last 1 cycle, averaging 30 days, your next period may start around Tuesday, 3 November, give or take a few days.
+
+⌨️  You> goodbye
+You: goodbye
+🔊 Jarvis: Okay, talk soon!
+
+⌨️  You> 
+✅ Test script finished.
+   (your real memories were restored: the test changed nothing)

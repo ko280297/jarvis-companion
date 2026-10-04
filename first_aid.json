@@ -44,5 +44,39 @@
     "title": "Nosebleed",
     "triggers": ["nose ?bleed", "nose is bleeding", "bleeding from my nose"],
     "advice": "Sit up, lean slightly forward, and pinch the soft part of your nose for 10 to 15 minutes. Don't tilt your head back. If it doesn't stop after 20 minutes, please get medical help."
+  },
+  "dizzy": {
+    "title": "Feeling dizzy",
+    "triggers": [
+      "dizzy",
+      "dizziness",
+      "head is spinning",
+      "room is spinning",
+      "feel faint",
+      "light ?headed"
+    ],
+    "advice": "Please sit or lie down right away so you don't fall, and breathe slowly. Take a few small sips of water, and get up slowly once it passes. If it comes with chest pain, a very bad headache, fainting, or trouble speaking, call 112 right away."
+  },
+  "nausea": {
+    "title": "Feeling sick",
+    "triggers": [
+      "vomit\\w*",
+      "nause\\w*",
+      "feel(?:ing)? sick",
+      "throw(?:ing)? up",
+      "threw up"
+    ],
+    "advice": "Sit upright and rest, and take small sips of water often so you don't get dehydrated. Avoid heavy food for a while. If you can't keep any water down, see blood, or it lasts more than a day, please see a doctor."
+  },
+  "cramps": {
+    "title": "Period cramps",
+    "triggers": [
+      "period cramps",
+      "period pain",
+      "menstrual cramps",
+      "menstrual pain",
+      "cramps"
+    ],
+    "advice": "A warm water bottle or heating pad on your lower belly can help, along with rest, gentle stretching and sips of water. If the pain is severe, unusual for you, or stops you from doing everyday things, please see a doctor."
   }
 }

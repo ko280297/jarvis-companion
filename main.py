@@ -33,6 +33,7 @@ from activities import handle_activity, is_active, end_activity, game_reprompt
 from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_screen
 from lookup import handle_lookup, offer_lookup
 from period import handle_period
+from cycle import handle_cycle, is_cycle_question, clear_cycle_log
 
 # Testing aid: "python main.py --log" also writes everything to session_log.txt (never committed)
 if "--log" in sys.argv:
@@ -854,6 +855,7 @@ def handle_command(text, memory, history, reminders):
         reminders.clear_all()
         clear_journal()
         clear_focus_log()
+        clear_cycle_log()
         clear_session()
         del history[1:]
         print(f"🧹 Erased {count} memories and list items, and all reminders")
@@ -1048,6 +1050,19 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False
             continue
 
+        # Period tracker: private, on this device only, and never in guest mode
+        if is_cycle_question(text):
+            if _guest:
+                say(f"That's {memory.get_setting('user_name') or 'the user'}'s private information, so I'll keep it for them.",
+                    "🔒 guest mode: kept private")
+                continue
+            cycle_reply = handle_cycle(text)
+            if cycle_reply:
+                dashboard.update(last_heard="(private)")
+                say(cycle_reply, "🩸 cycle (on device, private)", tone="gentle")
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+
         # Goodbye (a single "bye" during a game is usually "five" misheard, so the game gets it)
         short_by = len(text.split()) <= 3 and re.match(r"by\b", text.lower())
         one_word = len(text.split()) <= 1
@@ -1186,17 +1201,22 @@ def main():
         if handle_command(text, memory, history, reminders):
             continue
 
-        # 2. Date and time (Python, offline)
-        tool_answer = answer_time_question(text)
-        if tool_answer:
-            say(tool_answer, "🕐 device clock (offline)")
-            continue
+        # 2. Date and time (Python, offline). Not for "the time period of..." / "time zone" questions
+        if not re.search(r"\btime (?:period|of the|zone|line|travel|machine)\b", text.lower()):
+            tool_answer = answer_time_question(text)
+            if tool_answer:
+                say(tool_answer, "🕐 device clock (offline)")
+                continue
 
-        # 3. Obvious weather / news (rules)
-        online_answer = answer_online_question(text, memory.get_setting("home_city"))
-        if online_answer:
-            say(online_answer, "🌐 internet (rule)")
-            continue
+        # 3. Obvious weather / news (rules). Only for real requests, never for talk about the past
+        lower_q = text.lower()
+        is_request = re.search(r"\?|^(?:what|what's|how|will|is|are|do|does|should|tell|check|give|any)\b", lower_q)
+        about_past = re.search(r"\b(?:last (?:week|month|year|night)|yesterday|we had|there was|it was)\b", lower_q)
+        if is_request and not about_past:
+            online_answer = answer_online_question(text, memory.get_setting("home_city"))
+            if online_answer:
+                say(online_answer, "🌐 internet (rule)")
+                continue
 
         # During a game, anything that isn't a move or a real command gets a reprompt, never the LLM
         act = game_reprompt()
