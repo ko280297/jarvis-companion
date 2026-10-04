@@ -3,3 +3,6 @@ __pycache__/
 memories.db
 online_log.jsonl
 *.log
+en_GB-alan-medium.*
+en_US-joe-medium.*
+en_US-lessac-medium.*
