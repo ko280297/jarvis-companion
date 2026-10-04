@@ -30,6 +30,8 @@ from focus import (handle_focus, focus_tick, focus_due, is_focusing, focus_scree
                    focus_summary_line, clear_focus_log)
 from activities import handle_activity, is_active, end_activity, game_reprompt
 from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_screen
+from lookup import handle_lookup, offer_lookup
+from period import handle_period
 
 # ---------- Audio ----------
 STT_MODEL = "base.en"           # everyday commands: fast
@@ -63,7 +65,7 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
                 "set reminders and timers, run focus sessions with healthy breaks, "
                 "give you a summary of your day, tell you the date and time, "
                 "play simple games, listen in meetings for dates and tasks, "
-                "check the weather or news, guide you through calming exercises when you need a moment, "
+                "check the weather or news, look things up online if you ask, tell you what's planned for any day, week or month, "
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
@@ -550,6 +552,15 @@ def fix_command_word(text):
         return " ".join([best] + words[1:])
     return text
 
+def private_names(memory):
+    """Names that must never leave the device in a search: the user and the people they've told me about."""
+    names = {memory.get_setting("user_name")}
+    for t in memory.all():
+        m = re.search(r"\bname is (\w+)|^(\w+) is a friend of", t.split(" (saved on")[0], re.I)
+        if m:
+            names.add(m.group(1) or m.group(2))
+    return {n for n in names if n}
+
 
 def take_introduction(text):
     """'I am Krati, who are you?' -> ('who are you?', 'Krati'). Does NOT save the name:
@@ -938,6 +949,14 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False
             continue
 
+        # "Look it up?": only after the user agrees, or asks directly. Personal questions never leave.
+        looked = handle_lookup(text, private_names(memory))
+        if looked:
+            say(looked[0], looked[1])
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+
+
         # Wellbeing. During a thought dump: did the recording end because they paused (not because 60 s ran out)?
         paused = not venting or len(audio) < (60 - 1) * SAMPLE_RATE
         plan = handle_wellbeing(text, memory, paused=paused)
@@ -954,6 +973,13 @@ def main():
             say("Okay, talk soon!", "👋 conversation ended", tone="bright")
             _guest = None
             follow_up, chime_next = False, False
+            continue
+
+        # Plans and progress over a period: "What's planned next week?", "What did I do this week?"
+        period_reply = None if _guest else handle_period(text, memory)
+        if period_reply:
+            say(period_reply, "📅 plans & progress (on device)")
+            follow_up, follow_count, chime_next = True, 0, False
             continue
 
         # Focus & Energy: sessions, breaks, pause/resume (no LLM)
@@ -1157,8 +1183,15 @@ def main():
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."
             else:
-                reply = "Hmm, I'm not sure about that one, and I'd rather not guess wrong."
+                reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
+                offer_lookup(text)
             route_name = "🤔 not sure (guess withheld)"
+
+        # Confidence isn't truth: for facts with a year, offer a quick online double-check
+        if (is_question and not found and not route_name.startswith("🤔")
+                and re.search(r"\b(?:1[5-9]\d\d|20\d\d)\b", text)):
+            reply += " I can double-check that online if you like."
+            offer_lookup(text)
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(

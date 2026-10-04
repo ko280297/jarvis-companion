@@ -1,16 +1,17 @@
+   (real memories backed up; the test will not change them)
 ⌨️  Text mode: type what you'd say. Ctrl + C to stop.
    (timers and reminders are checked after each line you type)
 📊 Dashboard: http://localhost:8000
 Loading models...
-   ✔ wake word  (0.2s)
-   ✔ speech to text  (0.5s)
-   ✔ memory, reminders, voice  (0.5s)
-   ✔ intent gate  (3.9s)
-Ready! (3.9s)
+   ✔ wake word  (0.1s)
+   ✔ speech to text  (0.3s)
+   ✔ memory, reminders, voice  (0.3s)
+   ✔ intent gate  (3.2s)
+Ready! (3.2s)
 
 ⌨️  You> what time is it
 You: what time is it
-🔊 Jarvis: It is 1:15 PM.
+🔊 Jarvis: It is 4:34 PM.
 
 ⌨️  You> my name is Krati
 You: my name is Krati
@@ -30,7 +31,7 @@ You: where are my keys
 🚦 Gate: 0.24 (lists)
 📚 Using memory:
 - my keys are in the blue drawer (saved on Sunday, 04 October 2026)
-🤔 Confidence: 0.91  (9.8s)
+🤔 Confidence: 0.91  (8.2s)
 🔊 Jarvis: Your keys are in the blue drawer.
 
 ⌨️  You> forget that
@@ -41,7 +42,7 @@ You: forget that
 ⌨️  You> where are my keys
 You: where are my keys
 🚦 Gate: 0.24 (lists)
-🤔 Confidence: 0.53  (3.4s)
+🤔 Confidence: 0.53  (3.1s)
    (withheld guess: check the usual places: the kitchen, the car, and the desk.)
 🔊 Jarvis: I don't have that saved. You can tell me, and I'll remember it.
 
@@ -60,7 +61,7 @@ You: add milk and eggs to my grocery list
 
 ⌨️  You> what's on my grocery list
 You: what's on my grocery list
-🔊 Jarvis: Your grocery list has 8 items: eggs; milk; bread; knife; Ad Magi; eggs; milk; eggs.
+🔊 Jarvis: Your grocery list has 13 items: eggs; milk; bread; knife; Ad Magi; eggs; eggs; eggs; eggs; eggs; eggs; milk; eggs.
    (conversation limit reached: say 'Hey Jarvis' to continue)
 
 ⌨️  You> remove milk from my grocery list
@@ -87,7 +88,7 @@ You: what's the date next sunday
 You: what's my day
 🌐 ONLINE ✅ → geocoding-api.open-meteo.com | sent: 'Pune' | ok
 🌐 ONLINE ✅ → api.open-meteo.com | sent: '18.52,73.86' | ok
-🔊 Jarvis: Good afternoon, Krati! It's Sunday, 4 October. You have no more reminders today. Your grocery list has 7 items. You've focused for 11 minutes today, across 7 sessions. In Pune, India it's 33 degrees right now, mainly clear. Chance of rain is 0 percent.
+🔊 Jarvis: Good afternoon, Krati! It's Sunday, 4 October. You have no more reminders today. Your grocery list has 12 items. You've focused for 11 minutes today, across 7 sessions. In Pune, India it's 33 degrees right now, partly cloudy. Chance of rain is 0 percent.
 
 ⌨️  You> I'm Krati's friend Shubhangi
 You: I'm Krati's friend Shubhangi
@@ -132,7 +133,8 @@ You: I have a fever, what should I do
 
 ⌨️  You> I'm feeling anxious
 You: I'm feeling anxious
-🔊 Jarvis: I'm here to help you feel better. Let's try something gentle together.
+   (empathy line rejected: I'm here if you need to talk or just want someone to know you're not alone.)
+🔊 Jarvis: That sounds really uncomfortable. Let's slow things down together, one breath at a time.
 🔊 Jarvis: We'll do a physiological sigh, three times. Two breaths in through your nose, then one long breath out.
 🔊 Jarvis: Well done. Notice how you feel now.
 🔊 Jarvis: Would you like to try a short grounding exercise too?
@@ -188,7 +190,7 @@ You: stop focus
 
 ⌨️  You> how did I do today
 You: how did I do today
-🔊 Jarvis: Today you did 7 focus sessions, 11 minutes in total. You felt mostly tired.
+🔊 Jarvis: Today so far, you did 7 focus sessions, 11 minutes in total. You felt mostly okay. You have 3 open tasks.
 
 ⌨️  You> let's play tic tac toe
 You: let's play tic tac toe
@@ -208,11 +210,11 @@ You: stop the game
 
 ⌨️  You> let's play mental math
 You: let's play mental math
-🔊 Jarvis: Let's do 10 quick questions. Say repeat to hear one again, or skip to move on. Question 1. What's 7 plus 39?
+🔊 Jarvis: Let's do 10 quick questions. Say repeat to hear one again, or skip to move on. Question 1. What's 46 minus 29?
 
 ⌨️  You> skip
 You: skip
-🔊 Jarvis: It's 46. Question 2. What's 29 minus 23?
+🔊 Jarvis: It's 17. Question 2. What's 9 times 9?
 
 ⌨️  You> stop the game
 You: stop the game
@@ -221,7 +223,7 @@ You: stop the game
 ⌨️  You> let's play memory sequence
 You: let's play memory sequence
 🔊 Jarvis: Let's play memory sequence! Watch and listen, then say the colours back in order.
-   🧠 Pattern: green, red, green
+   🧠 Pattern: yellow, yellow, red
 🔊 Jarvis: Now it's your turn.
 
 ⌨️  You> stop the game
@@ -241,21 +243,71 @@ You: meeting mode on
 📝 meeting> meeting mode off
    📝 (meeting) meeting mode off
 🔊 Jarvis: Meeting mode is off. I noticed 2 things.
-🔊 Jarvis: I heard: Let's meet on Friday at 3 PM to review the slides. That's Friday, 9 October 2026. You already have Let's meet on Friday at 3 PM to review the slides. that day. Should I add it to your schedule?
+🔊 Jarvis: Let's meet on Friday at 3 PM to review the slides is already on your schedule, so I'll skip it.
+🔊 Jarvis: I heard a task: Rahul will send the report tomorrow. Should I save it to your tasks?
 
 ⌨️  You> yes
 You: yes
-🔊 Jarvis: Added to your schedule.
-🔊 Jarvis: I heard a task: Rahul will send the report tomorrow. Should I save it to your tasks?
+🔊 Jarvis: Added to your tasks.
+🔊 Jarvis: That's everything. The rest of the meeting wasn't kept.
 
 ⌨️  You> no
 You: no
-🔊 Jarvis: Okay, skipped.
-🔊 Jarvis: That's everything. The rest of the meeting wasn't kept.
+🚦 Gate: 0.21 (lists)
+🤔 Confidence: 0.74  (2.7s)
+🔊 Jarvis: Good afternoon, Krati! How are you feeling today?
 
 ⌨️  You> what can you do
 You: what can you do
-🔊 Jarvis: I can remember things for you, keep lists like groceries, ideas and your schedule, set reminders and timers, run focus sessions with healthy breaks, give you a summary of your day, tell you the date and time, play simple games, listen in meetings for dates and tasks, check the weather or news, guide you through calming exercises when you need a moment, and help you with the right numbers in an emergency. And if I'm not sure about something, I'll tell you instead of guessing.
+🔊 Jarvis: I can remember things for you, keep lists like groceries, ideas and your schedule, set reminders and timers, run focus sessions with healthy breaks, give you a summary of your day, tell you the date and time, play simple games, listen in meetings for dates and tasks, check the weather or news, look things up online if you ask, tell you what's planned for any day, week or month, and help you with the right numbers in an emergency. And if I'm not sure about something, I'll tell you instead of guessing.
+
+⌨️  You> what's on my schedule next week
+You: what's on my schedule next week
+🔊 Jarvis: Next week you have 4 things. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides.
+
+⌨️  You> what's planned this month
+You: what's planned this month
+🔊 Jarvis: This month you have 5 things. On Friday, 2 October: meeting with Rahul today. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides. On Friday, 9 October: Let's meet on Friday at 3 PM to review the slides.
+
+⌨️  You> am I free tomorrow
+You: am I free tomorrow
+🔊 Jarvis: You don't have anything on your schedule tomorrow.
+
+⌨️  You> what did I do this week
+You: what did I do this week
+🔊 Jarvis: This week so far, you did 7 focus sessions, 11 minutes in total. You felt mostly okay. You had 1 thing on your schedule: meeting with Rahul today. You have 4 open tasks.
+
+⌨️  You> look up black holes
+You: look up black holes
+   🔎 Searching Wikipedia for: black holes
+🔊 Jarvis: According to Wikipedia: A black hole is an astronomical body so compact that its gravity prevents anything, including light, from escaping. Albert Einstein's theory of general relativity, which describes gravitation as the curvature of spacetime, predicts that any sufficiently compact mass will form a black hole.
+
+⌨️  You> look up my friend Rhea
+You: look up my friend Rhea
+🔊 Jarvis: That sounds personal, so I won't send it online. Your private things stay on this device.
+
+⌨️  You> what is the meaning of Sarita
+You: what is the meaning of Sarita
+🚦 Gate: 0.07 (get_news)
+🤔 Confidence: 0.55  (6.2s)
+   (withheld guess: Sarita is a name that means "lucky" in Hindi.)
+🔊 Jarvis: Hmm, I'm not sure about that one. Want me to look it up online?
+
+⌨️  You> yes
+You: yes
+   🔎 Searching Wikipedia for: sarita given name
+🔊 Jarvis: I found a page called Sarita, but it covers several things. Could you be more specific?
+
+⌨️  You> who won the 1983 cricket world cup
+You: who won the 1983 cricket world cup
+🚦 Gate: 0.06 (get_weather)
+🤔 Confidence: 0.93  (7.0s)
+🔊 Jarvis: The West Indies won the 1983 Cricket World Cup. I can double-check that online if you like.
+
+⌨️  You> yes
+You: yes
+   🔎 Searching Wikipedia for: won the 1983 cricket world cup
+🔊 Jarvis: According to Wikipedia: The 1983 Cricket World Cup was the third edition of the Cricket World Cup tournament. It was held from 9 to 25 June 1983 in England and Wales and was won by India. Eight countries participated in the event. England, India, Pakistan and West Indies qualified for the semi-finals.
 
 ⌨️  You> goodbye
 You: goodbye
@@ -263,3 +315,4 @@ You: goodbye
 
 ⌨️  You> 
 ✅ Test script finished.
+   (your real memories were restored: the test changed nothing)

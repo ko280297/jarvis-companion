@@ -4,9 +4,13 @@ replaced by the keyboard. Great for quick regression tests of every feature.
   python text_mode.py                               type commands yourself
   python text_mode.py --speak                       ...and hear the replies
   python text_mode.py --fast < regression.txt       run a whole test script, no waiting
+                                                    (your real memories are backed up and put back after)
 """
+import gc
+import shutil
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -14,6 +18,13 @@ import main
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")          # emojis also work when the output goes to a file
+
+DB = Path(main.__file__).with_name("memories.db")
+BACKUP = DB.with_name("memories.db.testbackup")
+SANDBOX = "--fast" in sys.argv                     # a test script must never change the real memories
+if SANDBOX and DB.exists():
+    shutil.copy(DB, BACKUP)
+    print("   (real memories backed up; the test will not change them)")
 
 _typed = {"text": ""}
 
@@ -49,7 +60,14 @@ if "--fast" in sys.argv:
 
 print("⌨️  Text mode: type what you'd say. Ctrl + C to stop.")
 print("   (timers and reminders are checked after each line you type)")
+
 try:
     main.main()
 except KeyboardInterrupt:
     print("\n✅ Test script finished.")
+
+if SANDBOX and BACKUP.exists():
+    gc.collect()                                     # make sure the database is closed first
+    shutil.copy(BACKUP, DB)
+    BACKUP.unlink()
+    print("   (your real memories were restored: the test changed nothing)")

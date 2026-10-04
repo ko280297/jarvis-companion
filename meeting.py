@@ -90,6 +90,11 @@ def _ask_next(memory):
         return [("screen", None), _say("That's everything. The rest of the meeting wasn't kept.")]
     item = _review[0]
     if item["kind"] == "event":
+        saved_as = f"{item['text']} [date: {item['when']}]" if item["when"] else item["text"]
+        if saved_as in memory.list_get(SCHEDULE_LIST):              # exactly this is saved already
+            _review.pop(0)
+            return [_say(f"{item['text'].rstrip('.')} is already on your schedule, so I'll skip it.")] \
+                   + _ask_next(memory)
         question = f"I heard: {item['text']}"
         if item["when"]:
             question += f" That's {item['when']}."
