@@ -99,6 +99,7 @@ main.sleep_chime = lambda: None
 main.MEETING_STT_MODEL = main.STT_MODEL              # no big speech model needed when typing
 if "--speak" not in sys.argv:
     main.speak = lambda text, tone="calm": None      # print only, much faster
+    main._tts_speak = main.speak
 if "--fast" in sys.argv:
     time.sleep = lambda seconds: None                # breathing exercises etc. don't wait
 

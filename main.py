@@ -17,7 +17,7 @@ from openwakeword.model import Model as WakeModel
 from pywhispercpp.model import Model as SttModel
 
 import dashboard
-from tts import speak, set_voice
+from tts import speak as _tts_speak, set_voice
 from memory import MemoryStore, _embed, embed_many
 from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call, get_weather, check_place
@@ -34,6 +34,7 @@ from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_scree
 from lookup import handle_lookup, offer_lookup, cancel_lookup
 from period import handle_period
 from cycle import handle_cycle, is_cycle_question, clear_cycle_log
+
 
 # Testing aid: "python main.py --log" also writes everything to session_log.txt (never committed)
 if "--log" in sys.argv:
@@ -85,6 +86,7 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
                 "play simple games, listen in meetings for dates and tasks, "
                 "check the weather or news, look things up online if you ask, tell you what's planned for any day, week or month, "
                 "keep a private period tracker, "
+                "answer quietly on the screen when you need, "
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
@@ -155,6 +157,7 @@ _guest = None          # (name, since) while a friend is talking: RAM only
 _offer_remember = None   # "I love badminton" -> "Should I remember that?"
 _turn_start = None
 _last_list = None        # "what's left?" reads the list we just talked about
+_quiet = False           # quiet mode: answers on screen only (emergencies still speak)
 GUEST_MINUTES = 10
 
 WHO_TALKING = re.compile(
@@ -199,17 +202,28 @@ HARM_EXCLUDE = re.compile(
 
 
 # ---------- Output ----------
+def speak(text, tone="calm"):
+    """Speak aloud, unless quiet mode is on (then the screen shows it instead)."""
+    if not _quiet:
+        _tts_speak(text, tone)
+
+
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
     global _greeting, _turn_start
     text = (_greeting + " " + text).strip()
     _greeting = ""
-    print(f"🔊 Jarvis: {text}")
+    on_screen_only = _quiet and not route.startswith("🚨")     # emergencies are always spoken
+    print(f"🔇 Jarvis (on screen): {text}" if on_screen_only else f"🔊 Jarvis: {text}")
     if _turn_start:
         print(f"   ⏱️ reply after {time.time() - _turn_start:.1f}s")
-        _turn_start = None   
-    dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence, tone=tone)
-    speak(text, tone)
+        _turn_start = None
+    dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence,
+                     tone=tone, quiet=_quiet, reply_at=time.time())
+    if _quiet and route.startswith("🚨"):
+        _tts_speak(text, tone)                     # emergencies always speak, even in quiet mode
+    else:
+        speak(text, tone)
 
 
 EMPATHY_PROMPT = (
@@ -232,7 +246,7 @@ def empathy_line(user_text, earlier=()):
     messages.append({"role": "user", "content": user_text})
     try:
         r = requests.post(OLLAMA_URL, json={
-            "model": LLM_MODEL, "stream": False, "keep_alive": "30m", "messages": messages,
+            "model": LLM_MODEL, "stream": False, "keep_alive": "24h", "messages": messages,
             "options": {"temperature": 0.3, "num_predict": 40, "num_ctx": NUM_CTX},
         }, timeout=15)
         r.raise_for_status()
@@ -256,7 +270,7 @@ def fresh_idea(avoid=()):
     content = IDEA_PROMPT + (f" Do not suggest: {', '.join(avoid)}." if avoid else "")
     try:
         r = requests.post(OLLAMA_URL, json={
-            "model": LLM_MODEL, "stream": False, "keep_alive": "30m",
+            "model": LLM_MODEL, "stream": False, "keep_alive": "24h",
             "messages": [{"role": "system", "content": content}, {"role": "user", "content": "I'm bored."}],
             "options": {"temperature": 0.9, "num_predict": 30, "num_ctx": NUM_CTX},   # a little variety
         }, timeout=15)
@@ -372,7 +386,8 @@ def run_plan(plan, hear=None):
 
 # ---------- Listening ----------
 _threshold = 300.0    # speech loudness threshold, learned from the room while waiting for the wake word
-
+if _quiet:
+    volume *= 0.25                             # quiet mode: a soft chime, not a loud one
 
 def _chime(first_hz, second_hz, volume):
     rate = 44100
@@ -529,7 +544,7 @@ def route(text, tools):
     with requests.post(OLLAMA_URL, json={
         "model": LLM_MODEL,
         "stream": True,
-        "keep_alive": "30m",
+        "keep_alive": "24h",
         "tools": tools,
         "messages": [{"role": "user", "content": text}],
         "options": {"temperature": 0, "num_predict": 40, "num_ctx": NUM_CTX},
@@ -563,15 +578,17 @@ def context_message(memory):
     return {"role": "system", "content": f"{who}It is currently {part}."}
 
 
-def prewarm():
-    """Load the LLM and read the system prompt once in the background, so the first real answer is fast."""
+def prewarm(read_prompt=False):
+    """Keep the LLM loaded. With read_prompt (at startup and after 'forget everything'), also read the system
+    prompt once so the first answer is fast. On the wake word we only load: reading again would push the
+    current conversation out of the model's cache."""
     def _load():
+        payload = {"model": LLM_MODEL, "stream": False, "keep_alive": "24h", "messages": []}
+        if read_prompt:
+            payload["messages"] = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": "hi"}]
+            payload["options"] = {"temperature": 0, "num_predict": 1, "num_ctx": NUM_CTX}
         try:
-            requests.post(OLLAMA_URL, json={
-                "model": LLM_MODEL, "stream": False, "keep_alive": "24h",
-                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": "hi"}],
-                "options": {"temperature": 0, "num_predict": 1, "num_ctx": NUM_CTX},
-            }, timeout=120)
+            requests.post(OLLAMA_URL, json=payload, timeout=120)
         except requests.RequestException:
             pass
     threading.Thread(target=_load, daemon=True).start()
@@ -590,7 +607,7 @@ def think(messages):
         "model": LLM_MODEL,
         "messages": messages,
         "stream": False,
-        "keep_alive": "30m",
+        "keep_alive": "24h",
         "logprobs": True,
         "options": {"temperature": 0, "num_predict": 45, "num_ctx": NUM_CTX},
     }, timeout=120)
@@ -736,9 +753,21 @@ PERSON = re.compile(
 def handle_command(text, memory, history, reminders):
     """Handle reminder / list / people / voice / identity / city / remember / forget commands.
     Returns True if handled."""
-    global _expect_city
+    global _expect_city,_quiet
     lower = text.lower().strip(" .!?,")
-
+    # Quiet mode: answers on screen only (for the office, the library, late at night, private things)
+    if re.search(r"\b(?:quiet|silent) mode off\b|\b(?:turn|switch) off (?:the )?(?:quiet|silent) mode\b"
+                 r"|\bspeak (?:again|out loud)\b|\bunmute (?:yourself|your voice)\b|\byou can talk\b", lower):
+        _quiet = False
+        memory.set_setting("quiet_mode", "off")
+        say("I'm talking again.", "🔈 quiet mode off", tone="bright")
+        return True
+    if re.search(r"\b(?:quiet|silent) mode(?: on)?$|\b(?:turn|switch) on (?:the )?(?:quiet|silent) mode\b"
+                 r"|^be quiet\b|\bmute (?:yourself|your voice)\b|\bdon'?t speak\b", lower):
+        _quiet = True
+        memory.set_setting("quiet_mode", "on")
+        say("Quiet mode on. I'll answer on the screen. Emergencies will still be spoken.", "🔇 quiet mode on")
+        return True
     # "set a reminder for 7 pm to call papa" -> "remind me at 7 pm to call papa"
     m = re.match(r"^(?:please\s+)?(?:set|add|create) (?:a )?reminder (?:for|at) (.+?) to (.+)$", lower)
     if m:
@@ -759,8 +788,65 @@ def handle_command(text, memory, history, reminders):
         return n
 
     def items_of(said):
-        parts = [re.sub(r"^(?:a|an|the|some|few|\d+|one|two|three)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
+        """'milk, 2 eggs and the bread' -> ['milk', '2 eggs', 'bread'] (numbers are kept for quantities)."""
+        parts = [re.sub(r"^(?:the|some|a few|few)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
         return [p for p in parts if p]
+
+    NUMS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+            "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "a couple of": 2, "a dozen": 12,
+            "dozen": 12, "half a dozen": 6}
+
+    def split_qty(item):
+        """'2 eggs' -> (2, 'eggs'); 'a dozen bananas' -> (12, 'bananas'); 'milk' -> (None, 'milk')."""
+        item = item.strip()
+        m_ = re.match(r"^(\d+|half a dozen|a couple of|a dozen|dozen|one|two|three|four|five|six|seven|eight"
+                      r"|nine|ten|eleven|twelve)\s+(.+)$", item)
+        if m_:
+            return (int(m_.group(1)) if m_.group(1).isdigit() else NUMS[m_.group(1)]), m_.group(2)
+        return None, re.sub(r"^(?:a|an)\s+", "", item)
+
+    def same_key(word):
+        """'eggs' / 'egg', 'potatoes' / 'potato', 'berries' / 'berry' -> the same key."""
+        w = word.lower().strip()
+        for suffix, repl in (("oes", "o"), ("ies", "y"), ("s", "")):
+            if w.endswith(suffix) and len(w) > len(suffix) + 1:
+                return w[:-len(suffix)] + repl
+        return w
+
+    def find_item(lst, thing):
+        """The list entry for this thing, if any: ('6 eggs', 6, 'eggs')."""
+        for entry in memory.list_get(lst):
+            q, n = split_qty(entry)
+            if same_key(n) == same_key(thing):
+                return entry, q, n
+        return None
+
+    def replace_item(lst, old, new):
+        memory.list_remove(lst, old)
+        if new:
+            memory.list_add(lst, new)
+
+    def join(xs):
+        return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+
+    def take_off(lst, raws):
+        """Remove things (or just some of them): returns (gone, still_left, not_found)."""
+        gone, left, missing = [], [], []
+        for raw in raws:
+            qty, thing = split_qty(raw)
+            hit = find_item(lst, thing)
+            if not hit:
+                missing.append(thing)
+                continue
+            old, old_qty, old_name = hit
+            if qty and old_qty and qty < old_qty:            # "remove 2 eggs" from "6 eggs" -> "4 eggs"
+                replace_item(lst, old, f"{old_qty - qty} {old_name}")
+                left.append(f"{old_qty - qty} {old_name}")
+            else:                                             # all of it (and any repeats)
+                while memory.list_remove(lst, old):
+                    pass
+                gone.append(old_name)
+        return gone, left, missing
 
     known_lists = {list_name(n) for n in memory.list_names()} | {list_name(n) for n in STARTER_LISTS}
 
@@ -771,48 +857,76 @@ def handle_command(text, memory, history, reminders):
         return (lower.endswith(("list", "list too", "list as well")) or name in known_lists) \
             and not name.startswith("sched")
 
+    # Add: new things are added, numbers add up ("2 eggs" + "4 eggs" = "6 eggs"), no duplicates
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)
     if m and is_list_target(m.group(2)):
-        name, items = list_name(m.group(2)), items_of(m.group(1))
-        have = [i.lower() for i in memory.list_get(name)]
-        new = [i for i in items if i.lower() not in have]
-        for item in new:
-            memory.list_add(name, item)
+        name = list_name(m.group(2))
         _last_list = name
-        already = [i for i in items if i not in new]
+        added, more, already = [], [], []
+        for raw in items_of(m.group(1)):
+            qty, thing = split_qty(raw)
+            hit = find_item(name, thing)
+            if hit and qty:
+                old, old_qty, old_name = hit
+                total = (old_qty or 0) + qty
+                replace_item(name, old, f"{total} {old_name}")
+                more.append(f"{total} {old_name}")
+            elif hit:
+                already.append(thing)
+            else:
+                entry = f"{qty} {thing}" if qty else thing
+                memory.list_add(name, entry)
+                added.append(entry)
         parts = []
-        if new:
-            parts.append(f"Added {', '.join(new[:-1]) + ' and ' + new[-1] if len(new) > 1 else new[0]} to your {name} list.")
+        if added:
+            parts.append(f"Added {join(added)} to your {name} list.")
+        if more:
+            parts.append(f"You now have {join(more)} on your {name} list.")
         if already:
-            names_ = ", ".join(already[:-1]) + " and " + already[-1] if len(already) > 1 else already[0]
-            parts.append(f"{names_[0].upper() + names_[1:]} {'is' if len(already) == 1 else 'are'} already there.")
-
+            text_ = join(already)
+            parts.append(f"{text_[0].upper() + text_[1:]} {'is' if len(already) == 1 else 'are'} already there.")
         say(" ".join(parts), "📝 lists (on device)")
         return True
 
+    # Remove: all of it, or just some ("remove 2 eggs" from "6 eggs" leaves "4 eggs")
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:remove|delete|take off|cross off)\s+(?:all\s+(?:the\s+)?)?(.+?)"
                  r"\s+from\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?(?:\s+(?:too|as well))?$", lower)
     if m and is_list_target(m.group(2)):
         name = list_name(m.group(2))
         _last_list = name
-        done, missing = [], []
-        for item in items_of(m.group(1)):
-            count = 0
-            while memory.list_remove(name, item):
-                count += 1
-            (done if count else missing).append(item)
+        gone, left, missing = take_off(name, items_of(m.group(1)))
         parts = []
-        if done:
-            parts.append(f"Removed {', '.join(done)} from your {name} list.")
+        if gone:
+            parts.append(f"Removed {join(gone)} from your {name} list.")
+        if left:
+            parts.append(f"There {'is' if len(left) == 1 and left[0].startswith('1 ') else 'are'} now {join(left)} left.")
         if missing:
-            left = memory.list_get(name)
-            parts.append(f"I couldn't find {', '.join(missing)}. " +
-                         (f"Your list has: {', '.join(dict.fromkeys(left))}." if left else "The list is empty."))
+            rest = memory.list_get(name)
+            parts.append(f"I couldn't find {join(missing)}. " +
+                         (f"Your list has: {', '.join(dict.fromkeys(rest))}." if rest else "The list is empty."))
         say(" ".join(parts), "📝 lists (on device)")
         return True
 
-    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:clear|empty|wipe) (?:out )?(?:my\s+|the\s+)?([a-z ]+?)\s*list$", lower)
+    # "I bought potatoes" / "I've got milk and 2 eggs": tick them off the grocery list
+    m = re.match(r"^(?:(?:i|we)(?:'ve|\s+have|\s+just|\s+already)*\s+)?(?:bought|got|picked up|purchased)\s+(.+?)"
+                 r"(?:\s+(?:today|already|now|just now|from the (?:market|shop|store)))?$", lower)
     if m:
+        grocery = next((n for n in memory.list_names() if list_name(n) == "grocery"), "grocery")
+        gone, left, _ = take_off(grocery, items_of(m.group(1)))
+        if gone or left:                                   # only if it was really on the list
+            _last_list = list_name(grocery)
+            parts = ["Nice!"]
+            if gone:
+                parts.append(f"I've taken {join(gone)} off your grocery list.")
+            if left:
+                parts.append(f"You still need {join(left)}.")
+            say(" ".join(parts), "📝 lists (on device)", tone="bright")
+            return True
+        # nothing matched the list ("I got a promotion"): not about shopping, let the rest handle it
+     
+    # Clear a whole list: "clear my shopping list" / "empty my grocery list"
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:clear|empty|wipe) (?:out )?(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)
+    if m and is_list_target(m.group(1)):
         name = list_name(m.group(1))
         items = memory.list_get(name)
         for item in items:
@@ -821,6 +935,7 @@ def handle_command(text, memory, history, reminders):
         say(f"Done, your {name} list is empty now." if items else f"Your {name} list is already empty.",
             "📝 lists (on device)")
         return True
+   
 
     m = re.search(r"\bwhat(?:'s| is) (?:on|in) (?:my\s+|the\s+)?([a-z ]+?)\s*list\b"
                   r"|\b(?:show|display|read)(?: me)? (?:my\s+|the\s+)?([a-z ]+?)\s*list\b", lower)
@@ -951,7 +1066,7 @@ def handle_command(text, memory, history, reminders):
         clear_session()
         del history[1:]
         clear_llm_cache()              # also wipe the model's working memory (its cache) from RAM
-        prewarm()                      # load a fresh, empty copy so the next answer is quick again
+        prewarm(read_prompt=True)                      # load a fresh, empty copy so the next answer is quick again
         print(f"🧹 Erased {count} memories and list items, all reminders, and the model's cache")
         say("Done. I've erased everything I had saved, including my working memory.", "🧹 everything erased")
         return True
@@ -982,7 +1097,7 @@ def handle_command(text, memory, history, reminders):
 
 # ---------- Main loop ----------
 def main():
-    global _greeting, _pending_name, _guest, _offer_remember,_last_list,_turn_start
+    global _greeting, _pending_name, _guest, _offer_remember,_last_list,_turn_start,_quiet
     dashboard.start()
     t0 = time.time()
 
@@ -990,7 +1105,7 @@ def main():
         print(f"   ✔ {name}  ({time.time() - t0:.1f}s)")
 
     print("Loading models...")
-    prewarm()                                        # LLM loads in the background meanwhile
+    prewarm(read_prompt=True)                                        # LLM loads in the background meanwhile
     try:
         wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
     except Exception:
@@ -1003,6 +1118,8 @@ def main():
     memory = MemoryStore()
     reminders = Reminders()
     set_voice(memory.get_setting("voice") or "male")
+    _quiet = memory.get_setting("quiet_mode") == "on"   # remembered across restarts
+    dashboard.update(quiet=_quiet)
     step("memory, reminders, voice")
     example_vecs = embed_many([e for e, _ in INTENT_EXAMPLES])
     step("intent gate")
@@ -1550,13 +1667,6 @@ def main():
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
         if not found and not declined and is_question and not about_assistant and not looped \
                 and confidence < CONFIDENCE_THRESHOLD:
-                    # The LLM half-declined with very low confidence ("I'm not sure... but you're a great player!"): say it plainly
-            if declined and not found and is_question and not about_assistant and not looped \
-                and confidence < 0.6 and not re.search(r"\bmy\b", text.lower()):
-                print(f"   (unsure, mixed reply replaced: {reply})")
-                reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
-                offer_lookup(text)
-                route_name = "🤔 not sure (guess withheld)"
             print(f"   (withheld guess: {reply})")
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."
@@ -1565,6 +1675,14 @@ def main():
                 offer_lookup(text)
             route_name = "🤔 not sure (guess withheld)"
 
+        # The LLM half-declined with very low confidence ("I'm not sure... but you're a great player!"): say it plainly
+        if declined and not found and is_question and not about_assistant and not looped \
+                and confidence < 0.6 and not re.search(r"\bmy\b", text.lower()):
+            print(f"   (unsure, mixed reply replaced: {reply})")
+            reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
+            offer_lookup(text)
+            route_name = "🤔 not sure (guess withheld)"
+            
         # Confidence isn't truth: for facts with a year, offer a quick online double-check
         if (is_question and not found and not route_name.startswith("🤔")
                 and re.search(r"\b(?:1[5-9]\d\d|20\d\d)\b", text)):

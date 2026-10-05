@@ -462,6 +462,36 @@
         font-size: 15px;
         min-height: 20px;
       }
+      .statusbar {
+        position: fixed;
+        top: 12px;
+        right: 16px;
+        display: flex;
+        gap: 10px;
+        font-size: 14px;
+        color: var(--muted);
+        z-index: 5;
+      }
+      .statusbar span {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 10px;
+      }
+      .bubble {
+        display: none;
+        max-width: 420px;
+        margin-top: 14px;
+        padding: 12px 16px;
+        border-radius: 16px;
+        background: var(--card);
+        border: 1px solid var(--eye);
+        color: var(--text);
+        font-size: 18px;
+        line-height: 1.4;
+        text-align: center;
+        box-shadow: 0 0 18px var(--eye-glow);
+      }
 
       /* Emergency / first-aid banner */
       .sos {
@@ -664,6 +694,7 @@
     </div>
 
     <!-- Jarvis's face: shown whenever there's no banner or activity -->
+    <div class="statusbar" id="statusbar"></div>
     <div id="faceWrap" class="face-wrap">
       <div class="clock" id="clock"></div>
       <div id="face" class="face idle" title="Tap or pet me!">
@@ -683,6 +714,7 @@
         </div>
       </div>
       <div class="hint" id="hint">Say “Hey Jarvis”</div>
+      <div class="bubble" id="bubble"></div>
     </div>
 
     <div id="act" class="card act">
@@ -1078,6 +1110,15 @@
               : null;
           showActivity(a);
           showFace(s, !s.emergency && !a);
+          // Status icons (quiet mode now; online and mic come next)
+          $("statusbar").innerHTML = s.quiet
+            ? "<span>🔇 Quiet</span>"
+            : "<span>🔈 Voice</span>";
+          // Quiet mode: show the last answer in a speech bubble for 20 seconds
+          const fresh = s.reply_at && Date.now() / 1000 - s.reply_at < 20;
+          $("bubble").style.display =
+            s.quiet && fresh && s.last_reply ? "block" : "none";
+          $("bubble").textContent = s.last_reply || "";
           $("heard").textContent = s.last_heard || "—";
           $("reply").textContent = s.last_reply || "—";
           $("route").textContent = s.route || "—";
