@@ -54,8 +54,8 @@ STT_MODEL = "base.en"           # everyday commands: fast
 MEETING_STT_MODEL = "small.en"  # meetings: slower, but hears names and accents much better
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
-MAX_RECORD_SECONDS = 8      # longest question allowed
-SILENCE_TO_STOP = 1.5       # seconds of quiet that ends the question
+MAX_RECORD_SECONDS = 20    # longest question allowed
+SILENCE_TO_STOP = 2.0       # seconds of quiet that ends the question
 NO_SPEECH_TIMEOUT = 4.0     # after the wake word: give up if nothing is said
 FOLLOW_UP_SECONDS = 7.0     # conversation mode: how long to wait for a reply without the wake word
 MAX_FOLLOW_UPS = 10         # after this many turns without the wake word, go back to waiting for it
@@ -72,6 +72,8 @@ STRONG_GATE = 0.70            # above this: trust the gate even if the router he
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
 NUM_CTX = 2048                # our replies are short; a smaller context saves RAM on the Pi
+HISTORY_TURNS = 4             # how many recent exchanges the LLM remembers (more = slower on the Pi)
+CHAT_RESET_MINUTES = 15       # after this long without talking, a new conversation starts
 
 # ---------- Personality ----------
 ASSISTANT_NAME = "Jarvis"
@@ -91,27 +93,15 @@ END_CONVERSATION = re.compile(
 START_OVER = re.compile(r"\b(start (?:over|again|fresh|from scratch)|reset (?:the )?conversation|new conversation)\b")
 
 SYSTEM_PROMPT = (
-    f"Your name is {ASSISTANT_NAME}. You are a warm, friendly companion, like a helpful friend. "
-    "Speak casually and kindly, and keep answers to one or two short sentences. "
-    "Your replies are spoken aloud, so never use emojis, lists, or special symbols. "
-    "You can add a light friendly touch, but never make up facts: being honest matters more than being fun. "
-    "If someone asks how you are, answer warmly like a friend would, and ask about them too. "
-    "Never describe yourself as 'just a computer program'. "
-    "All your thinking happens on this device. "
-    "If a memory contains [date: ...], use exactly that date and never calculate dates yourself. "
-    "If the user's saved memories answer the question, answer only what was asked, "
-    "using just the relevant part of the memory. Do not repeat the whole memory. "
-    "If several saved memories answer the question, mention all of them. "
-    "If the user asks about their own life and it is not in their memories, "
-    "say you don't have that saved. "
-    "If you are not sure about something, say you don't know instead of guessing. "
-    "You cannot change settings. Never claim you saved, set, or changed anything. "
-    "You cannot see or change the user's lists. Never say you added, removed, or saved anything. "
-    "Only your user talks to you, unless memories say otherwise. "
-    "Never guess anyone's name: if a person's name is not in the saved memories, say you don't know it."
-    " Only if the user asks about health, symptoms or treatment: give no medical advice, kindly suggest a doctor."
-    " Always call the user by the name given in the system message, never by any other name."
-    " Never guess the user's gender, age or other personal details: if it isn't saved, say you don't know."
+    f"You are {ASSISTANT_NAME}, a warm, friendly companion who lives on this device. "
+    "Reply in one or two short spoken sentences, with no lists, emojis or symbols. "
+    "Never make up facts: if you are not sure, say you don't know. "
+    "If the user's saved memories answer the question, use only the relevant part, and copy any date exactly. "
+    "If something about the user isn't in their memories, say you don't have it saved; never guess names, gender or age. "
+    "You cannot set, save, change or send anything, so never claim you did. "
+    "Give no medical advice; kindly suggest a doctor. "
+    "Call the user by the name in the system message. If asked how you are, answer warmly and ask about them. "
+    "Never call yourself a computer program."
 )
 
 TOOLS = [
@@ -574,14 +564,24 @@ def context_message(memory):
 
 
 def prewarm():
-    """Start loading the LLM in the background, so it's ready by the time we need it."""
+    """Load the LLM and read the system prompt once in the background, so the first real answer is fast."""
     def _load():
         try:
-            requests.post(OLLAMA_URL, json={"model": LLM_MODEL, "messages": [],
-                                            "keep_alive": "30m"}, timeout=120)
+            requests.post(OLLAMA_URL, json={
+                "model": LLM_MODEL, "stream": False, "keep_alive": "24h",
+                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": "hi"}],
+                "options": {"temperature": 0, "num_predict": 1, "num_ctx": NUM_CTX},
+            }, timeout=120)
         except requests.RequestException:
             pass
     threading.Thread(target=_load, daemon=True).start()
+
+def clear_llm_cache():
+    """Unload the model, which also wipes its cache from RAM ('forget everything' should mean everything)."""
+    try:
+        requests.post(OLLAMA_URL, json={"model": LLM_MODEL, "messages": [], "keep_alive": 0}, timeout=10)
+    except requests.RequestException:
+        pass
 
 
 def think(messages):
@@ -592,13 +592,16 @@ def think(messages):
         "stream": False,
         "keep_alive": "30m",
         "logprobs": True,
-        "options": {"temperature": 0, "num_predict": 60, "num_ctx": NUM_CTX},
+        "options": {"temperature": 0, "num_predict": 45, "num_ctx": NUM_CTX},
     }, timeout=120)
     if response.status_code != 200:
         print("⚠️ Ollama says:", response.text)
     response.raise_for_status()
     data = response.json()
     reply = (data["message"].get("content") or "").strip()
+    read_n, write_n = data.get("prompt_eval_count", 0), data.get("eval_count", 0)
+    read_s, write_s = data.get("prompt_eval_duration", 0) / 1e9, data.get("eval_duration", 0) / 1e9
+    print(f"   (LLM read {read_n} tokens in {read_s:.1f}s, wrote {write_n} in {write_s:.1f}s)")
     lps = data.get("logprobs") or []
     confidence = math.exp(sum(t["logprob"] for t in lps) / len(lps)) if lps else 1.0
     return reply, confidence
@@ -759,8 +762,17 @@ def handle_command(text, memory, history, reminders):
         parts = [re.sub(r"^(?:a|an|the|some|few|\d+|one|two|three)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
         return [p for p in parts if p]
 
-    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)\s*list$", lower)
-    if m:
+    known_lists = {list_name(n) for n in memory.list_names()} | {list_name(n) for n in STARTER_LISTS}
+
+    def is_list_target(said):
+        """'grocery list', 'groceries', 'my shopping' -> True; 'the fridge' -> False.
+        The schedule is left to the older handler, which turns 'Friday' into a real date."""
+        name = list_name(said)
+        return (lower.endswith(("list", "list too", "list as well")) or name in known_lists) \
+            and not name.startswith("sched")
+
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)
+    if m and is_list_target(m.group(2)):
         name, items = list_name(m.group(2)), items_of(m.group(1))
         have = [i.lower() for i in memory.list_get(name)]
         new = [i for i in items if i.lower() not in have]
@@ -779,8 +791,8 @@ def handle_command(text, memory, history, reminders):
         return True
 
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:remove|delete|take off|cross off)\s+(?:all\s+(?:the\s+)?)?(.+?)"
-                 r"\s+from\s+(?:my\s+|the\s+)?([a-z ]+?)\s*list(?:\s+(?:too|as well))?$", lower)
-    if m:
+                 r"\s+from\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?(?:\s+(?:too|as well))?$", lower)
+    if m and is_list_target(m.group(2)):
         name = list_name(m.group(2))
         _last_list = name
         done, missing = [], []
@@ -938,8 +950,10 @@ def handle_command(text, memory, history, reminders):
         clear_cycle_log()
         clear_session()
         del history[1:]
-        print(f"🧹 Erased {count} memories and list items, and all reminders")
-        say("Done. I've erased everything I had saved.", "🧹 everything erased")
+        clear_llm_cache()              # also wipe the model's working memory (its cache) from RAM
+        prewarm()                      # load a fresh, empty copy so the next answer is quick again
+        print(f"🧹 Erased {count} memories and list items, all reminders, and the model's cache")
+        say("Done. I've erased everything I had saved, including my working memory.", "🧹 everything erased")
         return True
 
     if lower.startswith("forget that") or lower == "forget it":
@@ -993,6 +1007,7 @@ def main():
     example_vecs = embed_many([e for e, _ in INTENT_EXAMPLES])
     step("intent gate")
     history = [{"role": "system", "content": SYSTEM_PROMPT}]
+    last_chat = time.time()
     follow_up = False
     follow_count = 0
     chime_next = False
@@ -1466,8 +1481,14 @@ def main():
                     say(tool_reply, tool_route)
                     continue
 
+        if time.time() - last_chat > CHAT_RESET_MINUTES * 60:          # a new conversation after 10 quiet minutes
+            del history[1:]
+        last_chat = time.time()
+
+
         # 5. Local LLM answer (with memories if relevant)
-        messages = list(history)
+        # Things that rarely change go first (system, name, part of day), so Ollama can reuse what it already read
+        messages = [history[0], context_message(memory)] + history[1:]
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
             print(f"📚 Using memory:\n{facts}")
@@ -1483,13 +1504,16 @@ def main():
                 messages.append({"role": "system", "content": "Things the user has told you they like:\n"
                                  + "\n".join(f"- {l}" for l in likes[:5])
                                  + "\nUse one of them if it fits, to make the suggestion personal."})
-        messages.append(context_message(memory))
+        
         messages.append({"role": "user", "content": text})
 
         think_tick()
         start = time.time()
         reply, confidence = think(messages)
         reply = for_speech(reply)
+        # "I'm just a friendly AI, but I'm doing well" -> "I'm doing well" (Jarvis never talks itself down)
+        reply = re.sub(r"\bI'?m (?:just |only )?an? (?:\w+ )?(?:AI|bot|assistant|computer program|language model)\b"
+                       r",?\s*(?:but\s+)?(?:I'?m\s+)?", "I'm ", reply, flags=re.I).replace("I'm I'm", "I'm")
         # Stay in character: drop "I'm just a computer program" / "I don't feel emotions" sentences
         kept = [s for s in re.split(r"(?<=[.!?])\s+", reply)
                 if not re.search(r"computer program|don'?t (?:feel|have) (?:any )?emotions|as an ai|language model", s.lower())]
@@ -1526,6 +1550,13 @@ def main():
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
         if not found and not declined and is_question and not about_assistant and not looped \
                 and confidence < CONFIDENCE_THRESHOLD:
+                    # The LLM half-declined with very low confidence ("I'm not sure... but you're a great player!"): say it plainly
+            if declined and not found and is_question and not about_assistant and not looped \
+                and confidence < 0.6 and not re.search(r"\bmy\b", text.lower()):
+                print(f"   (unsure, mixed reply replaced: {reply})")
+                reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
+                offer_lookup(text)
+                route_name = "🤔 not sure (guess withheld)"
             print(f"   (withheld guess: {reply})")
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."
@@ -1555,7 +1586,8 @@ def main():
 
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
-        history = history[:1] + history[-4:]   # the last 2 exchanges are enough, and much faster
+        if len(history) > 1 + 2 * (HISTORY_TURNS + 2):        # trim in steps, so the model's cache stays useful
+            history = history[:1] + history[-2 * HISTORY_TURNS:]
         tone = "gentle" if route_name.startswith(("🤔", "🛡️")) else "calm"
         say(reply, route_name, round(confidence, 2), tone)
 

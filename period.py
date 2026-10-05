@@ -146,6 +146,8 @@ def work_text(memory, start, end, label):
 def handle_period(text, memory):
     """Returns a reply for questions about plans or progress over a period, otherwise None."""
     lower = text.lower().strip(" .!?,")
+    if re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put|remove|delete|cancel|set|create|schedule)\b", lower):
+        return None                                    # a command to change the schedule, not a question about it
     period = parse_period(lower)
     if not period:
         return None

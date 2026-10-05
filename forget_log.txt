@@ -1,0 +1,44 @@
+   (real memories backed up; the test will not change them)
+⌨️  Text mode: type what you'd say. Ctrl + C to stop.
+   (timers and reminders are checked after each line you type)
+📊 Dashboard: http://localhost:8000
+Loading models...
+   ✔ wake word  (0.3s)
+   ✔ speech to text  (2.2s)
+   ✔ memory, reminders, voice  (2.4s)
+   ✔ intent gate  (5.2s)
+Ready! (5.2s)
+
+⌨️  You> remember that my bag is red
+You: remember that my bag is red
+💾 Saved: my bag is red (saved on Monday, 05 October 2026)
+🔊 Jarvis: Okay, I'll remember that.
+   ⏱️ reply after 0.1s
+   ✅ PASS  (expected 'remember')
+
+⌨️  You> forget everything
+You: forget everything
+🧹 Erased 34 memories and list items, all reminders, and the model's cache
+🔊 Jarvis: Done. I've erased everything I had saved, including my working memory.
+   ⏱️ reply after 0.5s
+   ✅ PASS  (expected 'erased everything')
+
+⌨️  You> where is my bag
+You: where is my bag
+🔊 Jarvis: I don't have that saved. You can tell me, and I'll remember it.
+   ⏱️ reply after 0.0s
+   ✅ PASS  (expected 'don't have')
+
+⌨️  You> how are you
+You: how are you
+   (LLM read 196 tokens in 0.4s, wrote 21 in 1.1s)
+🤔 Confidence: 0.66  (6.9s)
+🔊 Jarvis: I'm just a friendly AI, but I'm doing well, thank you! How about you?
+   ⏱️ reply after 7.2s
+   ✅ PASS  (expected '.')
+
+⌨️  You> 
+✅ Test script finished.
+
+📊 SCORE: 4 / 4 passed
+   (your real memories were restored: the test changed nothing)

@@ -120,4 +120,14 @@ I'm bored, any ideas || .
 what's the weather tomorrow || degree|rain|can't reach
 I'm bored, any ideas || badminton|photography|painting
 I want to do something different || something new
+# Lists without the word "list"
+add milk to groceries || Added|already
+put chips on my shopping || Added|already
+add a meeting on friday to my schedule || schedule
+what's on my grocery list || milk
+# Follow-up conversation (context)
+tell me about badminton || shuttle|racket|court
+how do you score || point|21
+who is a famous player || !great player
+how are you doing today || !just a|!an AI
 goodbye || talk soon
