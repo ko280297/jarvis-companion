@@ -5,6 +5,7 @@ import random
 import re
 import threading
 import time
+import socket
 from collections import deque
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -62,6 +63,8 @@ FOLLOW_UP_SECONDS = 7.0     # conversation mode: how long to wait for a reply wi
 MAX_FOLLOW_UPS = 10         # after this many turns without the wake word, go back to waiting for it
 WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
+MIC_DEVICE = None           # on the Pi: part of the USB mic's name (e.g. "USB"), so Jarvis never silently
+                            # switches to another microphone when the mute switch cuts the USB mic
 REMINDER_CHECK_EVERY = 12   # chunks (~1 second) between reminder checks while waiting
 REMINDER_DUE = "reminder_due"
 
@@ -158,6 +161,8 @@ _offer_remember = None   # "I love badminton" -> "Should I remember that?"
 _turn_start = None
 _last_list = None        # "what's left?" reads the list we just talked about
 _quiet = False           # quiet mode: answers on screen only (emergencies still speak)
+_mic_ok = True           # is the microphone there? (the mute switch cuts its power)
+MIC_OFF = "mic_off"      # what listen() returns while the microphone is off
 GUEST_MINUTES = 10
 
 WHO_TALKING = re.compile(
@@ -418,7 +423,41 @@ def rms(frame):
     return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
 
 
-def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
+def pick_mic():
+    """The microphone to use: the default one, or the one whose name contains MIC_DEVICE."""
+    if not MIC_DEVICE:
+        return None
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] > 0 and MIC_DEVICE.lower() in d["name"].lower():
+            return i
+    raise RuntimeError(f"no microphone named '{MIC_DEVICE}'")
+
+
+def _set_mic(ok):
+    """Show the microphone state on screen (only when it changes)."""
+    global _mic_ok
+    if ok != _mic_ok:
+        print("🎙️ Microphone is back." if ok else "🔇 Microphone is off (mute switch?). Waiting for it...")
+    _mic_ok = ok
+    dashboard.update(mic=ok)
+
+
+def listen(*args, **kwargs):
+    """Like _listen_inner, but if the microphone is missing (mute switch), wait calmly instead of crashing."""
+    try:
+        return _listen_inner(*args, **kwargs)
+    except (sd.PortAudioError, RuntimeError, OSError):
+        _set_mic(False)
+        dashboard.update(status="waiting")
+        time.sleep(2)
+        try:                                       # look for the microphone again
+            sd._terminate()
+            sd._initialize()
+        except Exception:
+            pass
+        return MIC_OFF                             # a string: callers just try again
+
+def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
            silence=SILENCE_TO_STOP, timeout=FOLLOW_UP_SECONDS, level=None):
     """Wake-word mode: wait for 'Hey Jarvis', then record (and keep an eye on due reminders).
     Follow-up mode: skip the wake word and just listen briefly for a reply.
@@ -426,9 +465,10 @@ def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
     Returns the audio, REMINDER_DUE if a reminder needs announcing, or None if nobody spoke."""
     global _threshold
     chunk_sec = CHUNK / SAMPLE_RATE
-
+    
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                        dtype="int16", blocksize=CHUNK) as stream:
+                        dtype="int16", blocksize=CHUNK, device=pick_mic() + _set_mic(True)) as stream:
+        _set_mic(True)
         if follow_up:
             print("\n💬 Still listening, no wake word needed...")
             no_speech_timeout = timeout
@@ -576,6 +616,30 @@ def context_message(memory):
     else:
         who = f"The user's name is {name}. Use it now and then, not in every reply. " if name else ""
     return {"role": "system", "content": f"{who}It is currently {part}."}
+
+def network_up():
+    """True if this device has a route to the internet. Sends nothing: a UDP 'connect' only asks the
+    operating system for a route; no packet leaves the device."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("1.1.1.1", 53))
+        return True
+    except OSError:
+        return False
+
+
+def watch_network():
+    """Every 5 seconds, update the online/offline icon (in the background)."""
+    def _loop():
+        last = None
+        while True:
+            up = network_up()
+            if up != last:
+                print("🌐 Network is up." if up else "✈️ Offline: everything on the device still works.")
+                dashboard.update(online=up)
+                last = up
+            time.sleep(5)
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 def prewarm(read_prompt=False):
@@ -1099,6 +1163,7 @@ def handle_command(text, memory, history, reminders):
 def main():
     global _greeting, _pending_name, _guest, _offer_remember,_last_list,_turn_start,_quiet
     dashboard.start()
+    watch_network()
     t0 = time.time()
 
     def step(name):

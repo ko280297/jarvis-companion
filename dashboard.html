@@ -478,6 +478,10 @@
         border-radius: 999px;
         padding: 4px 10px;
       }
+      .statusbar span.warn {
+        border-color: var(--amber);
+        color: var(--amber);
+      }
       .bubble {
         display: none;
         max-width: 420px;
@@ -1111,9 +1115,25 @@
           showActivity(a);
           showFace(s, !s.emergency && !a);
           // Status icons (quiet mode now; online and mic come next)
-          $("statusbar").innerHTML = s.quiet
-            ? "<span>🔇 Quiet</span>"
-            : "<span>🔈 Voice</span>";
+          // Status icons: network, microphone, voice
+          const icons = [];
+          if (s.online === false)
+            icons.push(`<span class="warn">✈️ Offline</span>`);
+          else if (s.online) icons.push(`<span>🌐 Online</span>`);
+          icons.push(
+            s.mic === false
+              ? `<span class="warn">🔇 Mic off</span>`
+              : `<span>🎙️ Mic on</span>`,
+          );
+          icons.push(
+            s.quiet ? `<span>🤫 Quiet</span>` : `<span>🔈 Voice</span>`,
+          );
+          $("statusbar").innerHTML = icons.join("");
+          if (s.mic === false && $("faceWrap").style.display !== "none") {
+            $("hint").textContent =
+              "🔇 My microphone is off, so I can't hear anything.";
+          }
+
           // Quiet mode: show the last answer in a speech bubble for 20 seconds
           const fresh = s.reply_at && Date.now() / 1000 - s.reply_at < 20;
           $("bubble").style.display =
