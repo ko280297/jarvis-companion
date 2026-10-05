@@ -145,4 +145,9 @@ what time is it || It is
 I fell and I can't move my leg || 1 1 2
 I'm okay || glad
 quiet mode off || talking again
+# Share a list
+add bananas to my grocery list || Added|already
+share my grocery list || Scan
+send my shopping list to my phone || Scan
+share my holiday list || empty|nothing to share
 goodbye || talk soon

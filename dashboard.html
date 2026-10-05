@@ -496,7 +496,18 @@
         text-align: center;
         box-shadow: 0 0 18px var(--eye-glow);
       }
-
+      .qr {
+        display: none;
+        margin: 14px auto 4px;
+        padding: 14px;
+        background: #fff;
+        border-radius: 14px;
+      }
+      .qr svg {
+        width: 230px;
+        height: 230px;
+        display: block;
+      }
       /* Emergency / first-aid banner */
       .sos {
         display: none;
@@ -783,6 +794,7 @@
         </svg>
       </div>
       <div id="hug-caption" class="hug-caption">
+        <div id="qr" class="qr"></div>
         <span class="tap-l">left</span> · <span class="tap-r">right</span>
       </div>
     </div>
@@ -1095,7 +1107,12 @@
         $("hug").style.display = hug ? "flex" : "none";
         $("hug-caption").style.display = hug ? "block" : "none";
       }
-
+      // Share: the QR code (drawn only when it changes, so it doesn't flicker)
+      $("qr").style.display = a.qr ? "inline-block" : "none";
+      if ((a.qr || "") !== ($("qr").dataset.src || "")) {
+        $("qr").dataset.src = a.qr || "";
+        $("qr").innerHTML = (a.qr || "").replace(/<\?xml[^>]*\?>/, "");
+      }
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();

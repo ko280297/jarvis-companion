@@ -35,7 +35,7 @@ from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_scree
 from lookup import handle_lookup, offer_lookup, cancel_lookup
 from period import handle_period
 from cycle import handle_cycle, is_cycle_question, clear_cycle_log
-
+from share import share_list
 
 # Testing aid: "python main.py --log" also writes everything to session_log.txt (never committed)
 if "--log" in sys.argv:
@@ -987,6 +987,29 @@ def handle_command(text, memory, history, reminders):
             say(" ".join(parts), "📝 lists (on device)", tone="bright")
             return True
         # nothing matched the list ("I got a promotion"): not about shopping, let the rest handle it
+     
+    
+    # Share a list to the phone: a QR code opens it straight from this device, over the Wi-Fi, for 10 minutes
+    m = re.search(r"\b(?:share|send|download|export)\b.*?\b(?:my\s+|the\s+)?([a-z]+)(?:\s*list)\b", lower)
+    if m:
+        name = list_name(m.group(1))
+        _last_list = name
+        items = memory.list_get(name)
+        if not items:
+            say(f"Your {name} list is empty, so there's nothing to share yet.", "📤 share (on device)")
+            return True
+        url, svg = share_list(f"{name.title()} list", items)
+        if not url:
+            say("I need to be on Wi-Fi to send it to your phone. It only travels over your own Wi-Fi, never the internet.",
+                "📤 share (no network)")
+            return True
+        print(f"📤 Shared over this Wi-Fi only, for 10 minutes: {url}")
+        dashboard.update(activity={"title": f"📤 {name.title()} list",
+                                   "lines": ["Scan with your phone (same Wi-Fi)", "The link works for 10 minutes"],
+                                   "qr": svg, "expires": time.time() + 120})
+        say("Scan the code on my screen with your phone. It opens your list straight from me, over your Wi-Fi, "
+            "for the next 10 minutes. You can save it as a PDF from there.", "📤 shared on this Wi-Fi (not online)")
+        return True
      
     # Clear a whole list: "clear my shopping list" / "empty my grocery list"
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:clear|empty|wipe) (?:out )?(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)

@@ -59,6 +59,7 @@ pytz==2026.4
 pywhispercpp==1.5.1
 PyYAML==6.0.3
 pyzmq==27.2.0
+qrcode==8.2
 regex==2026.9.10
 requests==2.34.2
 rich==15.0.0
