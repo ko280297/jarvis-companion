@@ -2,6 +2,7 @@
   "default_country": "India",
   "countries": {
     "India": {
+      "phone_digits": 10,
       "emergency": { "label": "Emergency", "number": "112" },
       "ambulance": { "label": "Ambulance", "number": "108" },
       "police": { "label": "Police", "number": "100" },

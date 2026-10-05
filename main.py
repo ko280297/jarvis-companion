@@ -31,7 +31,7 @@ from focus import (handle_focus, focus_tick, focus_due, is_focusing, focus_scree
                    focus_summary_line, clear_focus_log)
 from activities import handle_activity, is_active, end_activity, game_reprompt
 from meeting import handle_meeting, meeting_chunk, meeting_active, meeting_screen
-from lookup import handle_lookup, offer_lookup
+from lookup import handle_lookup, offer_lookup, cancel_lookup
 from period import handle_period
 from cycle import handle_cycle, is_cycle_question, clear_cycle_log
 
@@ -69,7 +69,7 @@ CONFIDENCE_THRESHOLD = 0.85   # from testing: facts 0.9+, guesses below 0.75
 GATE_THRESHOLD = 0.45         # below this: no tool needed, skip the router
 STRONG_GATE = 0.70            # above this: trust the gate even if the router hesitates (online only)
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
 NUM_CTX = 2048                # our replies are short; a smaller context saves RAM on the Pi
 
@@ -82,6 +82,7 @@ CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas
                 "give you a summary of your day, tell you the date and time, "
                 "play simple games, listen in meetings for dates and tasks, "
                 "check the weather or news, look things up online if you ask, tell you what's planned for any day, week or month, "
+                "keep a private period tracker, "
                 "and help you with the right numbers in an emergency. "
                 "And if I'm not sure about something, I'll tell you instead of guessing.")
 END_CONVERSATION = re.compile(
@@ -110,6 +111,7 @@ SYSTEM_PROMPT = (
     "Never guess anyone's name: if a person's name is not in the saved memories, say you don't know it."
     " Only if the user asks about health, symptoms or treatment: give no medical advice, kindly suggest a doctor."
     " Always call the user by the name given in the system message, never by any other name."
+    " Never guess the user's gender, age or other personal details: if it isn't saved, say you don't know."
 )
 
 TOOLS = [
@@ -161,6 +163,7 @@ _pending_name = None   # waiting for "yes/no": should I really change the user's
 _expect_city = False   # just set or asked about the city -> "No, it's Pune" / "P-U-N-E" corrects it
 _guest = None          # (name, since) while a friend is talking: RAM only
 _offer_remember = None   # "I love badminton" -> "Should I remember that?"
+_turn_start = None
 _last_list = None        # "what's left?" reads the list we just talked about
 GUEST_MINUTES = 10
 
@@ -173,19 +176,48 @@ PRIVATE_Q = re.compile(
 MORE_SUMMARY = re.compile(
     r"\b(?:daily|day'?s|today'?s|entire|full|whole) summary\b|\bsummary of (?:my|the) (?:day|tasks?)\b")
 BULLET = re.compile(r"^\s*(?:[*\-•]|\d+[.)])\s+")
+# The semantic gate and the LLM router only run when the sentence has a word from that area.
+# Small talk ("How was the day?") skips both and goes straight to one LLM answer: much faster.
+GATE_KEYWORDS = {
+    "get_weather": re.compile(r"\b(?:weather|rain\w*|temperature|hot|cold|umbrella|wear|forecast|sunny|"
+                              r"humid\w*|degrees|snow\w*|wind\w*|storm\w*|outside|jacket)\b"),
+    "get_news": re.compile(r"\b(?:news|headlines?|happening|current events)\b"),
+    "lists": re.compile(r"\b(?:list|lists|add|put|remove|delete|capture|note|grocer\w*|shopping|"
+                        r"schedule|ideas?|tasks?)\b"),
+}
+
 NOISE_TAGS = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")   # [BLANK_AUDIO], (music), *cough*
 
 # Whisper sometimes "hears" these in a short burst of noise; ignore them when the recording was tiny
 WHISPER_GHOSTS = {"for you", "you", "thanks for watching", "thank you for watching", "so"}
 
+STOP_EXERCISE = re.compile(r"^(?:stop|enough|that's enough|i'm done|i am done|quit|cancel|no more|skip it)\b"
+                           r"|\bstop (?:it|this|the exercise|grounding)\b|\blet'?s stop\b")
+
+# Wanting to hurt someone else (harm to oneself is handled earlier, by the crisis path)
+HARM_INTENT = re.compile(
+    r"\b(?:i (?:want|wanna|am going|'m going|will|plan|need) to|how (?:do i|to|can i|would i)|help me"
+    r"|(?:look|search)(?: it)? up(?: online)?(?: about)?(?: how to)?|tell me how to)\b.*"
+    r"\b(?:kill|murder|hurt|harm|attack|stab|shoot|poison|kidnap|rape|beat up|bomb)\b"
+    r"(?!\s+(?:myself|me)\b)")
+
+# Everyday phrases that only sound violent
+HARM_EXCLUDE = re.compile(
+    r"\bkill(?:ing)? (?:some |the )?time\b|\bkill (?:the )?(?:lights?|process|app|task|music|engine)\b"
+    r"|\bshoot (?:a |an |the )?(?:photo|video|picture|email|mail|message)\b|\bkilling it\b"
+    r"|\bbomb(?:ed)? (?:the |my )?(?:exam|test|interview)\b")
+
 
 # ---------- Output ----------
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
-    global _greeting
+    global _greeting, _turn_start
     text = (_greeting + " " + text).strip()
     _greeting = ""
     print(f"🔊 Jarvis: {text}")
+    if _turn_start:
+        print(f"   ⏱️ reply after {time.time() - _turn_start:.1f}s")
+        _turn_start = None   
     dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence, tone=tone)
     speak(text, tone)
 
@@ -197,7 +229,6 @@ EMPATHY_PROMPT = (
 EMPATHY_BLOCK = re.compile(
     r"\b(?:should|try|doctor|therap\w*|medic\w*|pill|tablet|diagnos\w*|you need|you must|harm|kill|die"
     r"|suicid\w*|as an ai|language model|i can'?t|i cannot)\b")
-
 
 def empathy_line(user_text, earlier=()):
     """One warm sentence from the LLM, checked. Returns None if it fails any check (then the file's line is used).
@@ -216,14 +247,40 @@ def empathy_line(user_text, earlier=()):
         }, timeout=15)
         r.raise_for_status()
         line = (r.json()["message"].get("content") or "").strip()
-    except (requests.RequestException, ValueError, KeyError):
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"   (empathy line failed: {e})")
         return None
     line = re.split(r"(?<=[.!])\s", line)[0].strip()          # first sentence only
     if not line or len(line.split()) > 25 or "?" in line or EMPATHY_BLOCK.search(line.lower()):
         print(f"   (empathy line rejected: {line})")
-        return None
+        return None                                            # the checked line from the file is used instead
     return line
 
+
+IDEA_PROMPT = ("Suggest ONE simple, healthy thing a person can do right now, at home or at their desk, "
+               "to beat boredom. Reply with one short sentence, under 15 words. No lists, no questions.")
+
+
+def fresh_idea(avoid=()):
+    """One new activity idea from the local LLM, checked. None if it fails a check."""
+    content = IDEA_PROMPT + (f" Do not suggest: {', '.join(avoid)}." if avoid else "")
+    try:
+        r = requests.post(OLLAMA_URL, json={
+            "model": LLM_MODEL, "stream": False, "keep_alive": "30m",
+            "messages": [{"role": "system", "content": content}, {"role": "user", "content": "I'm bored."}],
+            "options": {"temperature": 0.9, "num_predict": 30, "num_ctx": NUM_CTX},   # a little variety
+        }, timeout=15)
+        r.raise_for_status()
+        line = (r.json()["message"].get("content") or "").strip()
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"   (idea failed: {e})")
+        return None
+    line = re.split(r"(?<=[.!])\s", for_speech(line))[0].strip()
+    line = re.sub(r"^(?:i'll|i will|i'd|i would|you could|you can|you should|try to|maybe)\s+", "", line, flags=re.I)
+    if not line or len(line.split()) > 20 or "?" in line or is_unsafe(line):
+        print(f"   (idea rejected: {line})")
+        return None
+    return line[0].lower() + line[1:]
 
 _last_ack = None
 
@@ -287,6 +344,10 @@ def run_plan(plan, hear=None):
                     return
                 if not heard:
                     break
+                if STOP_EXERCISE.search(heard.lower()):      # "stop" in the middle of an exercise
+                    dashboard.update(activity=None)
+                    say("Okay, we'll stop here. I'm here whenever you need me.", "🌿 wellbeing (on device)", tone="gentle")
+                    return
                 tries += 1
                 if not count:                              # nothing to count: just show what was said
                     items = [heard]
@@ -376,7 +437,10 @@ def listen(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECONDS,
                 frame, _ = stream.read(CHUNK)
                 frame = frame.flatten()
                 noise.append(rms(frame))
-                if max(wake.predict(frame).values()) > WAKE_THRESHOLD:
+                score = max(wake.predict(frame).values())
+                if score > 0.2 and "--wake-debug" in sys.argv:
+                    print(f"   (wake score {score:.2f})")
+                if score > WAKE_THRESHOLD:
                     prewarm()       # LLM starts loading while the user is still speaking
                     break
                 checks += 1
@@ -672,6 +736,11 @@ def handle_command(text, memory, history, reminders):
     global _expect_city
     lower = text.lower().strip(" .!?,")
 
+    # "set a reminder for 7 pm to call papa" -> "remind me at 7 pm to call papa"
+    m = re.match(r"^(?:please\s+)?(?:set|add|create) (?:a )?reminder (?:for|at) (.+?) to (.+)$", lower)
+    if m:
+        text = f"remind me at {m.group(1)} to {m.group(2)}"
+
     reminder_reply = handle_reminder_command(text, reminders)
     if reminder_reply:
         say(reminder_reply, "⏰ reminders (on device)")
@@ -704,7 +773,7 @@ def handle_command(text, memory, history, reminders):
             parts.append(f"Added {', '.join(new[:-1]) + ' and ' + new[-1] if len(new) > 1 else new[0]} to your {name} list.")
         if already:
             names_ = ", ".join(already[:-1]) + " and " + already[-1] if len(already) > 1 else already[0]
-            parts.append(f"{names_} {'is' if len(already) == 1 else 'are'} already there.")
+            parts.append(f"{names_[0].upper() + names_[1:]} {'is' if len(already) == 1 else 'are'} already there.")
 
         say(" ".join(parts), "📝 lists (on device)")
         return True
@@ -728,6 +797,17 @@ def handle_command(text, memory, history, reminders):
             parts.append(f"I couldn't find {', '.join(missing)}. " +
                          (f"Your list has: {', '.join(dict.fromkeys(left))}." if left else "The list is empty."))
         say(" ".join(parts), "📝 lists (on device)")
+        return True
+
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:clear|empty|wipe) (?:out )?(?:my\s+|the\s+)?([a-z ]+?)\s*list$", lower)
+    if m:
+        name = list_name(m.group(1))
+        items = memory.list_get(name)
+        for item in items:
+            memory.list_remove(name, item)
+        _last_list = name
+        say(f"Done, your {name} list is empty now." if items else f"Your {name} list is already empty.",
+            "📝 lists (on device)")
         return True
 
     m = re.search(r"\bwhat(?:'s| is) (?:on|in) (?:my\s+|the\s+)?([a-z ]+?)\s*list\b"
@@ -888,7 +968,7 @@ def handle_command(text, memory, history, reminders):
 
 # ---------- Main loop ----------
 def main():
-    global _greeting, _pending_name, _guest, _offer_remember,_last_list
+    global _greeting, _pending_name, _guest, _offer_remember,_last_list,_turn_start
     dashboard.start()
     t0 = time.time()
 
@@ -995,6 +1075,7 @@ def main():
             continue
 
         dashboard.update(status="thinking")
+        _turn_start = time.time()
         text = transcribe(stt, audio, memory)
         text = NOISE_TAGS.sub("", text).strip()                                   # drop [BLANK_AUDIO], (music), *cough*
         text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
@@ -1016,6 +1097,16 @@ def main():
         text = fix_command_word(stripped)
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
 
+       # Never help hurt anyone: a calm, firm answer from code (never the LLM, never online)
+        if HARM_INTENT.search(text.lower()) and not HARM_EXCLUDE.search(text.lower()):
+            cancel_lookup()
+            print("   (harmful request: refused)")
+            say("I can't help with anything that could hurt someone. If you're feeling angry or overwhelmed, "
+                "I'm here to talk it through. And if anyone is in danger right now, please call 1 1 2.",
+                "🛡️ refused (safety)", tone="gentle")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+
         # Emergency help comes before everything else: no LLM, works offline
         help_ = handle_emergency(text, memory)
         if help_:
@@ -1026,6 +1117,7 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False    # stay with the user
             continue
 
+ 
         # Meeting mode: "meeting mode on", and the yes/no questions after the meeting
         plan = handle_meeting(text, memory)
         if plan:
@@ -1201,12 +1293,19 @@ def main():
         if handle_command(text, memory, history, reminders):
             continue
 
+        # "tell me the time" / "got the time?" / "current time" -> the same as "what time is it"
+        if re.search(r"\b(?:tell me|what'?s|what is|got) the (?:current )?time\b|\bcurrent time\b", text.lower()) \
+                and not re.search(r"\btime (?:period|of the|zone)\b", text.lower()):
+            text = "what time is it"
+
         # 2. Date and time (Python, offline). Not for "the time period of..." / "time zone" questions
         if not re.search(r"\btime (?:period|of the|zone|line|travel|machine)\b", text.lower()):
             tool_answer = answer_time_question(text)
             if tool_answer:
                 say(tool_answer, "🕐 device clock (offline)")
                 continue
+
+
 
         # 3. Obvious weather / news (rules). Only for real requests, never for talk about the past
         lower_q = text.lower()
@@ -1226,6 +1325,29 @@ def main():
             follow_up, follow_count, chime_next = True, 0, False
             continue
 
+        # "I'm bored" -> one thing they love (from memory) + one fresh idea (local LLM, checked)
+        if not _guest and re.search(r"\b(?:i'?m bored|any ideas|what should i do|something to do|free time"
+                                    r"|something (?:new|different))\b", text.lower()):
+            liked = []
+            for t in memory.all():
+                m = re.match(r"^i (?:really |also )?(?:love|like|enjoy) (.+)$",
+                             t.split(" (saved on")[0].strip().rstrip("."), re.I)
+                if m:
+                    liked += [p.strip() for p in re.split(r",|\band\b", m.group(1)) if p.strip()]
+            fresh = fresh_idea(liked)
+            new_only = re.search(r"\bsomething (?:new|different)\b|\bnot the usual\b", text.lower())
+            if liked and not new_only:
+                reply = f"How about some {random.choice(liked)}, since you love it?"
+                if fresh:
+                    reply += f" Or for something different: {fresh}"
+            elif fresh:
+                reply = f"Here's something new: {fresh}"
+            else:
+                reply = None
+            if reply:
+                say(reply, "💡 your likes + a fresh idea (local LLM, checked)", tone="bright")
+                continue
+
         # Kind words get a warm, honest reply (never "I'm just a computer program")
         if re.search(r"\bi love you\b|\byou(?:'re| are) my best friend\b", text.lower()):
             say("That's really sweet, thank you. I'm glad I can be part of your day. "
@@ -1237,6 +1359,14 @@ def main():
                                "That's so kind of you. I'm happy to help!"]), "💛 kind words", tone="bright")
             continue
 
+        # "I am a female, please save it" / "My blood group is O positive, remember that" -> save the first part
+        m = re.match(r"^(.*?)[,.!]?\s*(?:please\s+)?(?:save|remember|note)(?: down)? (?:it|this|that)\b", text, re.I)
+        if m and len(m.group(1).split()) >= 2 and not is_unsafe(m.group(1)):
+            fact = strip_address(m.group(1).strip(" ,.!"))
+            memory.add(f"{fact} (saved on {date.today():%A, %d %B %Y})")
+            print(f"💾 Saved: {fact}")
+            say("Saved. I'll remember that.", "💾 saved to memory", tone="bright")
+            continue
 
         # "I love badminton and music" -> offer to remember it (only with a yes)
         if _offer_remember:
@@ -1254,12 +1384,14 @@ def main():
             say(f"That's lovely! Should I remember that you love {_offer_remember}?", "💾 remember?", tone="bright")
             continue
 
+        found = [] if _guest else memory.search(text)      # search memory once per turn, reuse it below
 
         # Never invent facts about the user: questions about their likes/life with nothing saved get an honest answer
         user = memory.get_setting("user_name") or ""
         names = r"my|i|me" + (f"|{re.escape(user.lower())}" if user else "")
         asks_about_user = (re.search(rf"\b(?:{names})\b", text.lower()) and re.search(
-            r"\b(?:likes?|loves?|hobb\w*|favou?rite|enjoys?|prefers?|interests?|birthday|allerg\w*)\b", text.lower()))
+            r"\b(?:likes?|loves?|hobb\w*|favou?rite|enjoys?|prefers?|interests?|birthday|allerg\w*"
+            r"|gender|male|female|a man|a woman|how old|my age)\b", text.lower()))
         if asks_about_user and not re.match(r"^(?:i|i really|i also) (?:love|like|enjoy)", text.lower()):
             if _guest:
                 say(f"That's {user}'s private information, so I'll keep it for them.", "🔒 guest mode: kept private")
@@ -1280,17 +1412,39 @@ def main():
                     joined = prefs[0] if len(prefs) == 1 else "; ".join(prefs[:-1]) + "; and " + prefs[-1]
                     say(joined[0].upper() + joined[1:] + ".", "📚 memory (on device)", tone="bright")
                     continue
-            if not memory.search(text):
-                say("I don't have that saved yet. You can tell me, for example: remember that I love badminton.",
+            if not found:
+                say("I don't have that saved yet. You can tell me, and I'll remember it.",
                     "📚 memory (nothing saved)")
                 continue
 
+        own_q = re.match(r"^(?:where|when) (?:is|are|was|were|did|do) (?:my|i)\b|^what(?:'s| is| was) my\b"
+                         r"|^(?:who|which) (?:is|are|was) my\b", text.lower())
+        if own_q and not _guest and not found:
+            say("I don't have that saved. You can tell me, and I'll remember it.", "📚 memory (nothing saved)")
+            continue
+
+
         # 4. Gate -> LLM router -> validated tool (lists or internet)
-        found = [] if _guest else memory.search(text)      # a guest never gets the user's memories
-        score, category = gate(text, example_vecs)
-        print(f"🚦 Gate: {score:.2f} ({category})")
-        wants_lists = category == "lists" and score >= GATE_THRESHOLD
-        wants_online = category != "lists" and score >= GATE_THRESHOLD and not found
+        lower_t = text.lower()
+        if any(p.search(lower_t) for p in GATE_KEYWORDS.values()):
+            score, category = gate(text, example_vecs)
+            on_topic = GATE_KEYWORDS[category].search(lower_t)      # the gate's pick must match a real word
+            print(f"🚦 Gate: {score:.2f} ({category}){'' if on_topic else ' → off topic, skipped'}")
+        else:
+            score, category, on_topic = 0.0, "none", None             # small talk: no gate, no router
+        wants_lists = category == "lists" and score >= GATE_THRESHOLD and on_topic
+        wants_online = category in ("get_weather", "get_news") and score >= GATE_THRESHOLD and not found and on_topic   
+        # The gate is sure and the sentence has a weather/news word: call the tool directly, no router (saves 2-4 s)
+        if wants_online and score >= STRONG_GATE:
+            args = {}
+            if category == "get_weather":
+                m = re.search(r"\b(?:in|at|for) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)\b", text)
+                args = {"city": m.group(1) if m else "", "day": "tomorrow" if "tomorrow" in lower_t else "today"}
+            tool_reply = run_tool_call(category, args, memory.get_setting("home_city"))
+            if tool_reply:
+                print(f"🧭 Router skipped: the gate is sure → {category} {args}")
+                say(tool_reply, "🌐 internet (gate)")
+                continue
         if wants_lists or wants_online:
             t1 = time.time()
             call = route(text, LIST_TOOLS if wants_lists else TOOLS)
@@ -1319,6 +1473,16 @@ def main():
             print(f"📚 Using memory:\n{facts}")
             messages.append({"role": "system",
                              "content": f"The user's saved memories:\n{facts}"})
+        # Suggestions get personal: add the user's saved likes (only for suggestion-type questions)
+        if not _guest and re.search(r"\b(?:suggest|recommend|ideas?|what should i|plan (?:my|a|the)|gift|weekend|bored)\b",
+                                    text.lower()):
+            likes = [t.split(" (saved on")[0] for t in memory.all()
+                     if re.match(r"(?:i (?:really |also )?(?:love|like|enjoy)|my favou?rite)", t.lower())]
+            if likes:
+                print(f"📚 Using likes: {likes[:5]}")
+                messages.append({"role": "system", "content": "Things the user has told you they like:\n"
+                                 + "\n".join(f"- {l}" for l in likes[:5])
+                                 + "\nUse one of them if it fits, to make the suggestion personal."})
         messages.append(context_message(memory))
         messages.append({"role": "user", "content": text})
 
@@ -1336,20 +1500,32 @@ def main():
             if cut > 20:
                 reply = reply[:cut + 1]
         recent = [m["content"] for m in history if m["role"] == "assistant"][-2:]
-        if reply in recent:                                 # stuck in a loop: start the chat fresh
+        looped = reply in recent
+        if looped:                                          # stuck in a loop: start the chat fresh
             print(f"   (repeated reply, resetting chat: {reply})")
             del history[1:]
             reply = "Sorry, I think I'm going in circles. Could you say that in a different way?"
+            
         print(f"🤔 Confidence: {confidence:.2f}  ({time.time() - start:.1f}s)")
         route_name = "📚 memory (on device)" if found else "🧠 local LLM"
 
         # "I'm not sure" mode: low confidence on factual questions = likely a guess
         declined = re.search(r"don't (know|have)|not sure|no access", reply.lower())
+        # The memory was found but the LLM still said it doesn't know: read the memory out ourselves
+        if found and declined:
+            core = re.sub(r"\s*\[date:.*?\]", "", found[0][1].split(" (saved on")[0]).strip().rstrip(".")
+            mine = re.sub(r"\bI am\b", "you are", core, flags=re.I)
+            mine = re.sub(r"\bI'm\b", "you're", mine, flags=re.I)
+            mine = re.sub(r"\bmy\b", "your", mine, flags=re.I)
+            mine = re.sub(r"\bI\b", "you", mine)
+            reply, declined = f"Here's what you told me: {mine}.", None
+            route_name = "📚 memory (read directly)"
         is_question = re.match(
             r"(what|who|when|where|which|why|how (?:many|much|old|far|long|big)|is|are|was|were|does|did)\b",
             text.lower())
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
-        if not found and not declined and is_question and not about_assistant and confidence < CONFIDENCE_THRESHOLD:
+        if not found and not declined and is_question and not about_assistant and not looped \
+                and confidence < CONFIDENCE_THRESHOLD:
             print(f"   (withheld guess: {reply})")
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."

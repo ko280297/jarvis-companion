@@ -8,7 +8,7 @@ TIME_MSG = {"role": "system", "content": "Current local date and time (reference
 def test(name, messages, **extra):
     body = {"model": "qwen2.5:1.5b", "stream": False, "tools": TOOLS, "messages": messages}
     body.update(extra)
-    r = requests.post("http://localhost:11434/api/chat", json=body).json()
+    r = requests.post("http://127.0.0.1:11434/api/chat", json=body).json()
     calls = r["message"].get("tool_calls")
     print(f"{'✅' if calls else '❌'} {name}: {calls[0]['function'] if calls else r['message'].get('content')}")
 

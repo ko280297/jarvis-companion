@@ -103,6 +103,7 @@ def _focus_rows(start, end):
 
 def plans_text(memory, start, end, label):
     items = [(d, txt) for d, txt in _dated_items(memory) if start <= d <= end]
+    items = list(dict.fromkeys((d, txt.rstrip(".")) for d, txt in items))   # no repeats, no double full stops
     if not items:
         return f"You don't have anything on your schedule {label}."
     if start == end:

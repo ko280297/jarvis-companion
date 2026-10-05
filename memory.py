@@ -5,7 +5,7 @@ import numpy as np
 import requests
 
 DB_PATH = "memories.db"
-EMBED_URL = "http://localhost:11434/api/embed"
+EMBED_URL = "http://127.0.0.1:11434/api/embed"
 EMBED_MODEL = "all-minilm"
 KEEP_ALIVE = "30m"     # keep the small embedding model loaded, so searches stay fast
 

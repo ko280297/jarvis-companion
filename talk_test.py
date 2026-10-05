@@ -11,7 +11,7 @@ from tts import speak
 
 SAMPLE_RATE = 16000
 SECONDS = 5
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 LLM_MODEL = "qwen2.5:1.5b"
 
 SYSTEM_PROMPT = (

@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
+from safety import is_unsafe
 
 import requests
 
@@ -15,7 +16,7 @@ HEADERS = {"User-Agent": "JarvisCompanion/1.0 (private on-device hackathon assis
 MAX_WORDS = 10             # longest topic we send
 MAX_ANSWER_WORDS = 50      # how much of the summary we read out
 
-DIRECT = re.compile(r"^(?:please )?(?:look up|search (?:online )?(?:for )?|find out about)\s+(.+)$")
+DIRECT = re.compile(r"^(?:please )?(?:look up|search(?: online)?(?: for)?|find out about)\s+(.+)$")
 YES = re.compile(r"\b(?:yes|yeah|yep|sure|ok|okay|please|go ahead|look it up|do it)\b")
 NO = re.compile(r"^(?:no|nope|not now|never ?mind|don'?t)\b")
 PERSONAL = re.compile(r"\b(?:my|me|mine|i|i'm|i am|our|we|us)\b")
@@ -30,7 +31,12 @@ _pending = None     # the question Jarvis just offered to look up
 def offer_lookup(question):
     """Called after 'I'm not sure': remember the question in case the user says yes."""
     global _pending
-    _pending = question
+    _pending = None if is_unsafe(question) else question
+
+def cancel_lookup():
+    """Forget any pending 'want me to look it up?' offer."""
+    global _pending
+    _pending = None
 
 
 def _log(status, sent=None, attempted=None):
@@ -45,6 +51,8 @@ def _log(status, sent=None, attempted=None):
 def _topic(question, private_names):
     """'Who is the president of France?' -> 'the president of france', or (None, reason) if it can't leave."""
     q = question.lower().strip(" ?.!")
+    if is_unsafe(q):
+        return None, "unsafe"
     if PERSONAL.search(q) or any(n and re.search(rf"\b{re.escape(n.lower())}\b", q) for n in private_names):
         return None, "personal"
     m = MEANING.search(q)
@@ -92,6 +100,9 @@ def _search(topic):
 def _lookup(question, private_names):
     topic, why = _topic(question, private_names)
     if not topic:
+        if why == "unsafe":
+            _log("blocked", attempted="(an unsafe request)")
+            return "I won't look that up. I can't help with anything that could hurt someone.", "🛡️ search blocked (safety)"
         if why == "personal":
             _log("blocked", attempted="(a personal question)")
             return ("That sounds personal, so I won't send it online. Your private things stay on this device.",
@@ -126,7 +137,7 @@ def handle_lookup(text, private_names):
     lower = text.lower().strip(" .!?,")
     if _pending:
         question, _pending = _pending, None
-        if YES.search(lower) and len(lower.split()) <= 6:
+        if YES.search(lower) and len(lower.split()) <= 8:
             return _lookup(question, private_names)
         if NO.search(lower):
             return "Okay, no problem.", "🔎 search skipped"

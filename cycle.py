@@ -119,8 +119,9 @@ def handle_cycle(text):
         day, _pending_log = _pending_log, None
         if YES.search(lower):
             return _save(day)
-        if not LOG.search(lower):
+        if re.match(r"^(?:no|nope|don'?t|not)\b", lower):
             return "Okay, I won't note anything."
+        # another question instead ("when is my next period?"): drop the offer and answer it
 
     if FORGET.search(lower):
         clear_cycle_log()
