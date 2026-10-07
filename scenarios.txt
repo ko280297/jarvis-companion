@@ -23,7 +23,7 @@ what's my brother's name || don't know
 put tomatoes and onions on my shopping list || Added
 what's on my shopping list || tomatoes
 remove onions from my shopping list || Removed
-add call mom to my tasks list || Added
+add call mom to my tasks list || Added|already
 show me my tasks list || call mom
 clear my shopping list || clear|empt
 
@@ -150,4 +150,42 @@ add bananas to my grocery list || Added|already
 share my grocery list || Scan
 send my shopping list to my phone || Scan
 share my holiday list || empty|nothing to share
+# Period tracker: extras
+my period started 58 days ago || Just to check
+yes || noted
+my period ended 53 days ago || lasted 6 days
+my period started 28 days ago || Just to check
+yes || noted
+my period ended 23 days ago || lasted 6 days
+log headache 59 days ago || Noted: headache
+log headache 29 days ago || Noted: headache
+log cramps and bloating 27 days ago || Noted: cramps and bloating
+log cramps and chest pain || 1 1 2|1 0 8
+I'm okay || .
+do I get headaches before my period || 2 cycles
+what day of my cycle am I on || day 29
+how long does my period last || 6 days
+when is my next period || may start|late
+remind me 2 days before my next period || 2 days before
+for my period reminders, say time for chocolate || chocolate
+give me my cycle summary || summary
+share my cycle summary || Scan
+I'm Krati's friend Riya || Hi Riya
+give me my cycle summary || private
+I'm Krati || Welcome back
+delete my period data || deleted
+how are you || doing well|good|bright
+can you access the internet right now || connected|offline
+# QR in any words
+what's on my grocery list || grocery
+give me the QR for this || Scan
+I need a QR code for my grocery list || Scan
+close the QR code || gone
+share my grocery list || Scan
+closer QR || gone
+close the QR code || no code
+# Offline mode by voice
+offline mode on || Offline mode on
+any news today || can't reach
+offline mode off || Offline mode off
 goodbye || talk soon

@@ -7,3 +7,8 @@ en_GB-alan-medium.*
 en_US-joe-medium.*
 en_US-lessac-medium.*
 session_log.txt
+*.bak*
+*.testbackup
+apply_fixes*.py
+scenarios_log.txt
+session_log.txt

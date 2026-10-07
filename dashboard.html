@@ -313,11 +313,34 @@
         height: 10px;
       }
       .face.speak .mouth {
-        width: 44px;
-        border: 5px solid var(--eye);
-        background: #123b31;
-        border-radius: 8px 8px 26px 26px;
-        animation: talk 0.26s ease-in-out infinite alternate;
+        position: relative;
+        overflow: hidden;
+        width: 40px;
+        height: 18px;
+        border: none;
+        background: var(--eye); /* a filled, friendly smile, not a dark hole */
+        border-radius: 6px 6px 22px 22px;
+        animation: talk 0.3s ease-in-out infinite alternate;
+      }
+      .face.speak .mouth::after {
+        /* a little pink tongue */
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: -6px;
+        width: 22px;
+        height: 12px;
+        transform: translateX(-50%);
+        border-radius: 50%;
+        background: #f7a1c4;
+      }
+      @keyframes talk {
+        from {
+          height: 10px;
+        }
+        to {
+          height: 20px;
+        }
       }
       .face.happy.speak .mouth {
         width: 54px;
@@ -481,6 +504,31 @@
       .statusbar span.warn {
         border-color: var(--amber);
         color: var(--amber);
+      }
+      .statusbar span {
+        cursor: pointer;
+        user-select: none;
+      }
+      .kiosk .statusbar span {
+        padding: 10px 16px;
+        font-size: 16px;
+      }
+      .act {
+        position: relative;
+      }
+      .act-close {
+        display: none;
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: var(--card);
+        color: var(--text);
+        font-size: 20px;
+        cursor: pointer;
       }
       .bubble {
         display: none;
@@ -733,6 +781,7 @@
     </div>
 
     <div id="act" class="card act">
+      <button id="actClose" class="act-close" title="Close">✕</button>
       <div class="act-title" id="act-title"></div>
       <div id="act-lines"></div>
       <div id="timer" class="timer"></div>
@@ -794,9 +843,9 @@
         </svg>
       </div>
       <div id="hug-caption" class="hug-caption">
-        <div id="qr" class="qr"></div>
         <span class="tap-l">left</span> · <span class="tap-r">right</span>
       </div>
+      <div id="qr" class="qr"></div>
     </div>
 
     <div class="details">
@@ -1036,6 +1085,21 @@
       setTimeout(blink, 2000);
       setTimeout(lookAround, 5000);
 
+      // Touch controls: tap a status button (offline mode, mic, quiet) or ✕ on a card
+      async function act(what) {
+        try {
+          await fetch("/action", { method: "POST", headers: { "X-Jarvis": "1" }, body: JSON.stringify({ do: what }) });
+        } catch (e) {}
+      }
+      $("statusbar").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-do]");
+        if (b) {
+          b.style.opacity = "0.5";
+          act(b.dataset.do);
+        }
+      });
+      $("actClose").addEventListener("click", () => act("close_card"));
+
       // ---------- Banners and activity cards ----------
       function showBanner(e) {
         $("sos").style.display = e ? "block" : "none";
@@ -1106,13 +1170,15 @@
         const hug = a.anim === "butterfly";
         $("hug").style.display = hug ? "flex" : "none";
         $("hug-caption").style.display = hug ? "block" : "none";
+        // Share: the QR code (drawn only when it changes, so it doesn't flicker)
+        $("actClose").style.display = a.qr ? "block" : "none";
+        $("qr").style.display = a.qr ? "inline-block" : "none";
+        if ((a.qr || "") !== ($("qr").dataset.src || "")) {
+          $("qr").dataset.src = a.qr || "";
+          $("qr").innerHTML = (a.qr || "").replace(/<\?xml[^>]*\?>/, "");
+        }
       }
-      // Share: the QR code (drawn only when it changes, so it doesn't flicker)
-      $("qr").style.display = a.qr ? "inline-block" : "none";
-      if ((a.qr || "") !== ($("qr").dataset.src || "")) {
-        $("qr").dataset.src = a.qr || "";
-        $("qr").innerHTML = (a.qr || "").replace(/<\?xml[^>]*\?>/, "");
-      }
+
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();
@@ -1134,18 +1200,29 @@
           // Status icons (quiet mode now; online and mic come next)
           // Status icons: network, microphone, voice
           const icons = [];
-          if (s.online === false)
-            icons.push(`<span class="warn">✈️ Offline</span>`);
-          else if (s.online) icons.push(`<span>🌐 Online</span>`);
+          if (s.offline_mode)
+            icons.push(`<span class="warn" data-do="toggle_offline">✈️ Offline mode</span>`);
+          else if (s.online === false)
+            icons.push(`<span class="warn" data-do="toggle_offline">✈️ Offline</span>`);
+          else icons.push(`<span data-do="toggle_offline">🌐 Online</span>`);
+          if (s.mic_muted)
+            icons.push(`<span class="warn" data-do="toggle_mic">🔇 Mic muted</span>`);
+          else if (s.mic === false)
+            icons.push(`<span class="warn" data-do="toggle_mic">🔇 Mic off</span>`);
+          else icons.push(`<span data-do="toggle_mic">🎙️ Mic on</span>`);
           icons.push(
-            s.mic === false
-              ? `<span class="warn">🔇 Mic off</span>`
-              : `<span>🎙️ Mic on</span>`,
+            s.quiet
+              ? `<span class="warn" data-do="toggle_quiet">🤫 Quiet</span>`
+              : `<span data-do="toggle_quiet">🔈 Voice</span>`,
           );
-          icons.push(
-            s.quiet ? `<span>🤫 Quiet</span>` : `<span>🔈 Voice</span>`,
-          );
-          $("statusbar").innerHTML = icons.join("");
+          const iconsHtml = icons.join("");
+          if ($("statusbar").dataset.html !== iconsHtml) {
+            $("statusbar").dataset.html = iconsHtml;          // redraw only on a change, so taps aren't lost
+            $("statusbar").innerHTML = iconsHtml;
+          }
+          if (s.mic_muted && $("faceWrap").style.display !== "none") {
+            $("hint").textContent = "🔇 My microphone is muted. Tap the mic button to turn it back on.";
+          }
           if (s.mic === false && $("faceWrap").style.display !== "none") {
             $("hint").textContent =
               "🔇 My microphone is off, so I can't hear anything.";

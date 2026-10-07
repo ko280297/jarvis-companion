@@ -10,7 +10,7 @@ QUESTIONS = [
 ]
 
 for q in QUESTIONS:
-    r = requests.post("http://localhost:11434/api/chat", json={
+    r = requests.post("http://127.0.0.1:11434/api/chat", json={
         "model": "qwen2.5:1.5b",
         "messages": [{"role": "user", "content": q + " Answer in one short sentence."}],
         "stream": False,

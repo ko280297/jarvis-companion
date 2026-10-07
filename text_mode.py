@@ -25,13 +25,24 @@ import main
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")          # emojis also work when the output goes to a file
 
-DB = Path(main.__file__).with_name("memories.db")
-BACKUP = DB.with_name("memories.db.testbackup")
-SANDBOX = "--fast" in sys.argv                     # a test script must never change the real memories
-if SANDBOX and DB.exists():
-    shutil.copy(DB, BACKUP)
-    print("   (real memories backed up; the test will not change them)")
+FOLDER = Path(main.__file__).parent
+SANDBOX = "--fast" in sys.argv                     # a test script must never change the real data
 
+# A backup left behind means a previous test crashed: put the real data back first
+for leftover in FOLDER.glob("*.testbackup"):
+    original = leftover.with_name(leftover.name[:-len(".testbackup")])
+    shutil.copy(leftover, original)
+    leftover.unlink()
+    print(f"   (a test crashed earlier: restored {original.name})")
+
+PROTECTED = list(FOLDER.glob("*.db")) + [FOLDER / "online_log.jsonl"]
+_existed = {p: p.exists() for p in PROTECTED}
+if SANDBOX:
+    for p in PROTECTED:
+        if p.exists():
+            shutil.copy(p, p.with_name(p.name + ".testbackup"))
+    print("   (real memories and the internet log backed up; the test will not change them)")
+    
 _typed = {"text": ""}
 _turn = {"line": None, "expect": None, "said": []}
 _results = []                                      # (section, line, expect, passed, reply)
@@ -111,16 +122,23 @@ try:
 except KeyboardInterrupt:
     _check_last_turn()
     print("\n✅ Test script finished.")
-
-if _results:
-    passed = sum(1 for r in _results if r[3])
-    print(f"\n📊 SCORE: {passed} / {len(_results)} passed")
-    for section, line, expect, ok, reply in _results:
-        if not ok:
-            print(f"   ❌ [{section}] \"{line}\"  expected {expect!r}\n      got: {reply[:160]}")
-
-if SANDBOX and BACKUP.exists():
-    gc.collect()                                     # make sure the database is closed first
-    shutil.copy(BACKUP, DB)
-    BACKUP.unlink()
-    print("   (your real memories were restored: the test changed nothing)")
+except Exception:
+    print("\n💥 Jarvis crashed during the test (details below). Your real data is still being restored.")
+    raise
+finally:
+    if _results:
+        passed = sum(1 for r in _results if r[3])
+        print(f"\n📊 SCORE: {passed} / {len(_results)} passed")
+        for section, line, expect, ok, reply in _results:
+            if not ok:
+                print(f"   ❌ [{section}] \"{line}\"  expected {expect!r}\n      got: {reply[:160]}")
+    if SANDBOX:
+        gc.collect()                                 # make sure the databases are closed first
+        for p in PROTECTED:
+            backup = p.with_name(p.name + ".testbackup")
+            if backup.exists():
+                shutil.copy(backup, p)
+                backup.unlink()
+            elif not _existed[p] and p.exists():
+                p.unlink()                           # created by the test: remove it
+        print("   (your real data was restored: the test changed nothing)")

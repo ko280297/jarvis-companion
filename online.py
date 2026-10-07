@@ -7,6 +7,11 @@ import requests
 LOG_FILE = "online_log.jsonl"
 TIMEOUT = 5
 NEWS_FEED = "https://feeds.bbci.co.uk/news/world/rss.xml"
+CACHE_SECONDS = 10 * 60      # weather is reused for 10 minutes: faster, and less leaves the device
+_geo_cache = {}              # city -> place (RAM only; cities don't move)
+_weather_cache = {}          # (city, day) -> (time, answer)
+LAST_CALL = {"ok": 0.0, "failed": 0.0}   # when an online call last worked / failed (for the screen icon)
+
 
 WEATHER_Q = re.compile(r"\b(weather|temperature|rain|forecast)\b")
 NEWS_Q = re.compile(r"\b(news|headlines)\b")
@@ -27,6 +32,8 @@ def _log(tool, sent, url, status):
              "tool": tool, "sent": sent, "host": host, "status": status}
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+    if status in LAST_CALL:
+        LAST_CALL[status] = time.time()
     icon = "✅" if status == "ok" else "❌"
     print(f"🌐 ONLINE {icon} → {host} | sent: {sent!r} | {status}")
 
@@ -44,6 +51,7 @@ def _get(tool, sent, url, params=None):
 
 NOT_CITIES = {"rain", "today", "tomorrow", "now", "right now", "this week", "the week"}
 
+
 def _extract_city(t, home_city):
     m = re.search(
         r"\b(?:in|at|for|of)\s+([a-z][a-z\s]*?)"
@@ -52,18 +60,30 @@ def _extract_city(t, home_city):
         return m.group(1).strip().title()
     return home_city
 
+
 def _geocode(city):
     """Pick the most populated match, and retry without spaces ('Shah Jahanpur' -> 'Shahjahanpur')."""
+    if city.lower() in _geo_cache:
+        return _geo_cache[city.lower()]
     for name in dict.fromkeys([city, city.replace(" ", "")]):
         geo = _get("weather", name,
                    "https://geocoding-api.open-meteo.com/v1/search",
                    {"name": name, "count": 10}).json()
         results = geo.get("results")
         if results:
-            return max(results, key=lambda r: r.get("population") or 0)
+            place = max(results, key=lambda r: r.get("population") or 0)
+            _geo_cache[city.lower()] = place
+            return place
     return None
 
+
 def get_weather(city, when="today"):
+    key = (city.lower(), when)
+    hit = _weather_cache.get(key)
+    if hit and time.time() - hit[0] < CACHE_SECONDS:
+        print("   (weather from the last 10 minutes: nothing sent)")
+        return hit[1]
+
     place = _geocode(city)
     if place is None:
         return f"I couldn't find a place called {city}."
@@ -95,7 +115,17 @@ def get_weather(city, when="today"):
     rain = day["precipitation_probability_max"][i]
     if rain is not None:
         answer += f" Chance of rain is {rain} percent."
+    _weather_cache[key] = (time.time(), answer)
     return answer
+
+def check_internet():
+    """Asked directly 'are you online?': one tiny request with nothing personal in it, logged like every call."""
+    try:
+        _get("check", "(nothing personal: just checking the connection)",
+             "https://api.open-meteo.com/v1/forecast", {"latitude": 0, "longitude": 0, "current": "temperature_2m"})
+        return True
+    except requests.RequestException:
+        return False
 
 def get_news(n=3):
     r = _get("news", "(nothing - public headlines only)", NEWS_FEED)
@@ -120,6 +150,7 @@ def answer_online_question(text, home_city=None):
         return ("I can't reach the internet right now, so I can't check that. "
                 "Everything else still works offline.")
     return None
+
 
 CITY_OK = re.compile(r"^[A-Za-z][A-Za-z .'-]{1,39}$")
 
@@ -156,6 +187,7 @@ def run_tool_call(name, args, home_city=None):
     _log_blocked(name, str(args))    # unknown tool: refuse
     return None
 
+
 def check_place(city):
     """Is this a real place? Returns 'Name, Country' if found, None if not found, '' if offline.
     Only the city name leaves the device, and it's logged like every other call."""
@@ -172,6 +204,7 @@ if __name__ == "__main__":
     tests = [
         ("What's the weather?", None),              # no home city set -> should ask
         ("What's the weather?", "Pune"),            # home city set -> uses it
+        ("What's the weather?", "Pune"),            # again -> from the 10-minute cache, nothing sent
         ("What's the weather in Mumbai?", None),    # city spoken -> uses Mumbai
         ("Tell me the news.", None),
         ("When is my meeting with Rahul?", None),   # not online -> None

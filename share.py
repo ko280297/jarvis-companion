@@ -9,13 +9,13 @@ import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
+from dashboard import _QuietServer
 import qrcode
 import qrcode.image.svg
 
 PORT = 8765
 LIFETIME = 10 * 60          # seconds a share link works
-_shares = {}                # token -> (expires_at, title, items, when)
+_shares = {}                # token -> (expires_at, title, items, when, checks)
 _server = None
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
@@ -49,8 +49,9 @@ class _Handler(BaseHTTPRequestHandler):
             _shares.pop(token, None)
             body, code, ctype = b"This link has expired or doesn't exist.", 404, "text/plain; charset=utf-8"
         else:
-            _, title, items, when = share
-            rows = "".join(f'<li><label><input type="checkbox">{html.escape(i)}</label></li>' for i in items)
+            _, title, items, when, checks = share
+            box = '<input type="checkbox">' if checks else ""
+            rows = "".join(f"<li><label>{box}{html.escape(i)}</label></li>" for i in items)
             body = PAGE.format(title=html.escape(title), when=when, items=rows or "<li>(empty)</li>").encode()
             code, ctype = 200, "text/html; charset=utf-8"
         self.send_response(code)
@@ -67,19 +68,26 @@ class _Handler(BaseHTTPRequestHandler):
 def _ensure_server():
     global _server
     if _server is None:
-        _server = ThreadingHTTPServer(("0.0.0.0", PORT), _Handler)
+        _server = _QuietServer(("0.0.0.0", PORT), _Handler)
         threading.Thread(target=_server.serve_forever, daemon=True).start()
 
 
-def share_list(title, items):
-    """Returns (url, qr_svg), or (None, None) if this device isn't on a network."""
+def share_list(title, items, checks=True):
+    """Returns (url, qr_svg), or (None, None) if this device isn't on a network.
+    checks=False for things that aren't to-do lists (like the cycle summary)."""
     ip = lan_ip()
     if not ip:
         return None, None
     _ensure_server()
     token = secrets.token_urlsafe(9)                      # random, unguessable
-    _shares[token] = (time.time() + LIFETIME, title, list(items), datetime.now().strftime("%d %B, %I:%M %p"))
+    _shares[token] = (time.time() + LIFETIME, title, list(items),
+                      datetime.now().strftime("%d %B, %I:%M %p"), checks)
     url = f"http://{ip}:{PORT}/s/{token}"
     buf = io.BytesIO()
     qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10).save(buf)
     return url, buf.getvalue().decode()
+
+
+def stop_sharing():
+    """Close every share link straight away (the QR card was closed)."""
+    _shares.clear()
