@@ -530,6 +530,9 @@
         font-size: 20px;
         cursor: pointer;
       }
+      .sos { position: relative; }
+      .sos-x { position: absolute; top: 8px; right: 10px; background: none; border: 0;
+               color: inherit; font-size: 26px; cursor: pointer; }
       .bubble {
         display: none;
         max-width: 420px;
@@ -752,6 +755,7 @@
     </div>
 
     <div id="sos" class="sos">
+      <button id="sosClose" class="sos-x" title="Close">✕</button>
       <div class="sos-title" id="sos-title"></div>
       <div id="sos-lines"></div>
     </div>
@@ -1179,6 +1183,10 @@
         }
       }
 
+      // ✕ on the emergency banner: tells Jarvis to close it
+      $("sosClose").addEventListener("click", () =>
+        fetch("/action", { method: "POST", headers: { "X-Jarvis": "1" },
+                           body: JSON.stringify({ do: "close_card" }) }));
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();

@@ -23,6 +23,22 @@ from pywhispercpp.model import Model as SttModel
 import dashboard
 from tts import speak as _tts_speak, set_voice
 from memory import MemoryStore, _embed, embed_many
+
+
+# Every save checks first: the same fact is never stored twice, whichever feature saves it
+_store_add = MemoryStore.add
+
+
+def _add_once(self, text, *args, **kwargs):
+    core = re.sub(r"\s*\[date:.*?\]", "", str(text).split(" (saved on")[0]).strip(" .").lower()
+    for old in self.all():
+        if re.sub(r"\s*\[date:.*?\]", "", old.split(" (saved on")[0]).strip(" .").lower() == core:
+            print(f"   (already saved, not added again: {core})")
+            return None
+    return _store_add(self, text, *args, **kwargs)
+
+
+MemoryStore.add = _add_once
 from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call, get_weather, check_place, LAST_CALL, check_internet
 from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAMES, STARTER_LISTS
@@ -84,17 +100,16 @@ CHAT_RESET_MINUTES = 15       # after this long without talking, a new conversat
 
 # ---------- Personality ----------
 ASSISTANT_NAME = "Jarvis"
-INTRO = (f"I'm {ASSISTANT_NAME}, your private companion. I live right here on this device, "
-         "so everything you tell me stays with you.")
-CAPABILITIES = ("I can remember things for you, keep lists like groceries, ideas and your schedule, "
-                "set reminders and timers, run focus sessions with healthy breaks, "
-                "give you a summary of your day, tell you the date and time, "
-                "play simple games, listen in meetings for dates and tasks, "
-                "check the weather or news, look things up online if you ask, tell you what's planned for any day, week or month, "
-                "keep a private period tracker, "
-                "answer quietly on the screen when you need, "
-                "and help you with the right numbers in an emergency. "
-                "And if I'm not sure about something, I'll tell you instead of guessing.")
+INTRO = (f"Hi, I'm {ASSISTANT_NAME}. I'm your private companion. "
+         "I live right here on this device. So everything you tell me, stays with you.")
+CAPABILITIES = ("Here's what I can do. "
+                "I remember things for you, and keep your lists. "
+                "I set reminders, timers and focus sessions. "
+                "I can tell you about your day, the weather, or the news. "
+                "I listen in meetings, and note the dates and tasks. "
+                "We can play simple games. "
+                "And in an emergency, I give you the right numbers. "
+                "If I'm not sure about something, I'll tell you.")
 END_CONVERSATION = re.compile(
     r"\b(bye|goodbye|good ?night|that's all|thats all|that is all|nothing else|stop listening"
     r"|talk to you later|ttyl|see you|talk soon)\b")
@@ -210,7 +225,9 @@ _expect_city = False   # just set or asked about the city -> "No, it's Pune" / "
 _guest = None          # (name, since) while a friend is talking: RAM only
 _offer_remember = None   # "I love badminton" -> "Should I remember that?"
 _turn_start = None
+_last_said = ""          # the last thing Jarvis said (so "forget it" knows what "it" is)
 _last_list = None        # "what's left?" reads the list we just talked about
+_pending_list = None     # (items, unknown list, best guess) while asking "did you mean ...?"
 _quiet = False           # quiet mode: answers on screen only (emergencies still speak)
 _lookup_at = None        # when "want me to look it up?" was offered (the offer expires)
 
@@ -257,7 +274,7 @@ def handle_actions(memory):
             memory.set_setting("mic_muted", "on" if _mic_muted else "off")
             print("👆 Screen: microphone " + ("muted (it isn't even opened)" if _mic_muted else "on"))
         elif action == "close_card":
-            dashboard.update(activity=None)
+            dashboard.update(activity=None, emergency=None)
             stop_sharing()
             print("👆 Screen: card closed (any share link is closed too)")
         dashboard.update(quiet=_quiet, offline_mode=_offline_mode, mic_muted=_mic_muted)
@@ -316,8 +333,9 @@ def speak(text, tone="calm"):
 
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
-    global _greeting, _turn_start
+    global _greeting, _turn_start, _last_said
     text = (_greeting + " " + text).strip()
+    _last_said = text
     _greeting = ""
     on_screen_only = _quiet and not route.startswith("🚨")     # emergencies are always spoken
     print(f"🔇 Jarvis (on screen): {text}" if on_screen_only else f"🔊 Jarvis: {text}")
@@ -852,6 +870,21 @@ def clear_llm_cache():
         pass
 
 
+def umbrella_answer(weather):
+    """'Should I take an umbrella?' gets a real answer first, then the weather."""
+    m = re.search(r"Chance of rain is (\d+) percent\.?", weather)
+    if not m:
+        return weather
+    p = int(m.group(1))
+    if p >= 60:
+        lead = f"Yes, take an umbrella. There's a {p} percent chance of rain."
+    elif p >= 30:
+        lead = f"Maybe keep an umbrella handy, just in case. There's a {p} percent chance of rain."
+    else:
+        lead = f"No, you won't need an umbrella. The chance of rain is only {p} percent."
+    return lead + " " + weather.replace(m.group(0), "").strip()
+
+
 def think(messages):
     """Returns (reply, confidence). Confidence comes from the model's own token probabilities."""
     response = requests.post(OLLAMA_URL, json={
@@ -878,18 +911,33 @@ def think(messages):
 
 
 # ---------- Text helpers ----------
+FILLERS = {"ok", "okay", "so", "nice", "great", "thanks", "thank", "you", "sorry", "cool", "alright", "hmm",
+           "well", "hey", "hi", "hello", "and", "oh", "good", "wow"}
+YES_NO = {"yes", "yeah", "yep", "no", "nope"}
+
+
 def strip_address(text):
-    """'Ok Jarvis, what's the weather?' / 'What's on my list, Jarvis?' -> just the request.
-    Also catches mishearings like 'Jardis', by comparing how similar the word is to the name."""
-    def is_name(word):
+    """'Ok Jarvis, what's the weather?' / 'Thank you John, stop the focus' / 'What's on my list, Jarvis?'
+    -> just the request. Speech-to-text often hears 'Jarvis' as John or Janice, so a J-name with a comma counts too.
+    'No Jarvis, thank you' keeps the 'No', so a yes/no answer still works."""
+    def sounds_like_name(word):
         return SequenceMatcher(None, word.lower().strip(",.!?"), ASSISTANT_NAME.lower()).ratio() >= 0.7
 
     words = text.split()
-    if len(words) > 1 and is_name(words[-1]):                    # name at the end
+    if len(words) > 1 and sounds_like_name(words[-1]):                       # name at the end
         words = words[:-1]
-    i = 1 if words and words[0].lower().strip(",.!?") in ("hey", "ok", "okay", "hi", "hello") else 0
-    if len(words) > i + 1 and is_name(words[i]):                 # name at the start
-        words = words[i + 1:]
+    for i, word in enumerate(words[:5]):                                     # name near the start
+        bare = word.strip(",.!?")
+        j_name = bare[:1] == "J" and 3 <= len(bare) <= 7 and (word.endswith(",") or i > 0)
+        if (sounds_like_name(word) or j_name) and i + 1 < len(words):
+            before = [w.lower().strip(",.!?") for w in words[:i]]
+            if all(w in FILLERS or w in YES_NO for w in before):
+                rest = words[i + 1:]
+                answer = [w for w in before if w in YES_NO]
+                if answer and len(rest) <= 3:                                # "No Jarvis, thank you" -> "No, thank you"
+                    rest = [answer[0].capitalize() + ","] + rest
+                words = rest
+            break
     return " ".join(words).strip(" ,") or text
 
 
@@ -943,6 +991,7 @@ def detect_guest(lower, user):
         rf"\b(?:i(?:'m| am)|this is) {owner}'?s {RELATIONS}[, ]+(\w+)",
         rf"\byou(?:'re| are) (?:talking|speaking|interacting|chatting) (?:to|with) (?:{owner}'?s |my )?{RELATIONS}[, ]+(\w+)",
         rf"\bmy {RELATIONS}[, ]+(\w+) is (?:talking|speaking|here)\b",
+        rf"()\b(?!(?:he|she|it|who|someone|somebody|nobody|everyone|this|that|{owner})\b)(\w+) is (?:talking|speaking)\b(?: here| now| to you)?",
     ]
     for p in patterns:
         m = re.search(p, lower)
@@ -979,7 +1028,7 @@ def clean_city(name):
 
 def save_city(city, memory):
     """Check the place exists, then save it. Returns the spoken reply."""
-    global _expect_city
+    global _expect_city, _pending_list
     found = check_place(city)
     if found == "":   # offline: can't check, so don't overwrite a good city with a guess
         _expect_city = False
@@ -1006,11 +1055,16 @@ PERSON = re.compile(
 def handle_command(text, memory, history, reminders):
     """Handle reminder / list / people / voice / identity / city / remember / forget commands.
     Returns True if handled."""
+    global _pending_list          # 'did you mean your grocery list?' state
     global _expect_city, _quiet, _offline_mode, _mic_muted
     lower = text.lower().strip(" .!?,")
     # Closing the QR card: any wording while it's on screen ("close it", "closer QR", "close the viewer", "done")
     qr_on_screen = bool((dashboard.STATE.get("activity") or {}).get("qr"))
     asks_close = re.search(r"\b(?:clos\w*|hide|remove|dismiss|take (?:it )?(?:away|off)|get rid of|go away)\b", lower)
+    if dashboard.STATE.get("emergency") and asks_close and not qr_on_screen:
+        dashboard.update(emergency=None)
+        say("Okay, I've cleared the screen. I'm still here if you need help.", "🚨 banner closed")
+        return True
     if qr_on_screen and (asks_close or re.fullmatch(r"(?:ok(?:ay)?\s*)?(?:done|scanned|i(?:'ve| have)? scanned it|got it)", lower)):
         import share
         share._shares.clear()                            # the share link closes too, not just the picture
@@ -1084,7 +1138,7 @@ def handle_command(text, memory, history, reminders):
 
     def items_of(said):
         """'milk, 2 eggs and the bread' -> ['milk', '2 eggs', 'bread'] (numbers are kept for quantities)."""
-        parts = [re.sub(r"^(?:the|some|a few|few)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
+        parts = [re.sub(r"^(?:the|some|a few|few|my)\s+", "", p.strip()) for p in re.split(r",|\band\b", said)]
         return [p for p in parts if p]
 
     NUMS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
@@ -1095,7 +1149,7 @@ def handle_command(text, memory, history, reminders):
         """'2 eggs' -> (2, 'eggs'); 'a dozen bananas' -> (12, 'bananas'); 'milk' -> (None, 'milk')."""
         item = item.strip()
         m_ = re.match(r"^(\d+|half a dozen|a couple of|a dozen|dozen|one|two|three|four|five|six|seven|eight"
-                      r"|nine|ten|eleven|twelve)\s+(.+)$", item)
+                      r"|nine|ten|eleven|twelve)\s+(?:more\s+)?(.+)$", item)
         if m_:
             return (int(m_.group(1)) if m_.group(1).isdigit() else NUMS[m_.group(1)]), m_.group(2)
         return None, re.sub(r"^(?:a|an)\s+", "", item)
@@ -1152,10 +1206,35 @@ def handle_command(text, memory, history, reminders):
         return (lower.endswith(("list", "list too", "list as well")) or name in known_lists) \
             and not name.startswith("sched")
 
+    # Answer to "You don't have a ... list yet. Should I add it to your grocery list instead?"
+    if _pending_list:
+        items_text, new_name, guess = _pending_list
+        _pending_list = None
+        if re.search(r"\bnew\b", lower):
+            for item in items_of(items_text):
+                memory.list_add(new_name, item)
+            _last_list = new_name
+            say(f"Done, I started a new {new_name} list with {items_text}.", "📝 lists (on device)")
+            return True
+        if re.match(r"(?:yes|yeah|yep|sure|ok|okay|please|correct|right)\b|" + re.escape(guess), lower):
+            lower = f"add {items_text} to my {guess} list"
+        elif re.match(r"(?:no|nope|cancel|leave it)\b", lower):
+            say("Okay, I didn't add anything.", "📝 lists (on device)")
+            return True
+
     # Add: new things are added, numbers add up ("2 eggs" + "4 eggs" = "6 eggs"), no duplicates
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)
     if m and is_list_target(m.group(2)):
         name = list_name(m.group(2))
+        if name not in known_lists and not re.fullmatch(  # "graph realist list" is probably a mishearing
+                r"(?:task|todo|to ?do|chore|idea|holiday|packing|travel|trip|wish|gift|book|movie|reading"
+                r"|work|home|homework|bill|medicine|birthday|party|project|goal|habit)s?", name):
+            import difflib
+            guess = (difflib.get_close_matches(name, sorted(known_lists), n=1, cutoff=0.3) or ["grocery"])[0]
+            _pending_list = (m.group(1), name, guess)
+            say(f"You don't have a {name} list yet. Should I add it to your {guess} list instead? "
+                f"Say yes, or say new list.", "📝 lists (asking)")
+            return True
         _last_list = name
         added, more, already = [], [], []
         for raw in items_of(m.group(1)):
@@ -1241,7 +1320,8 @@ def handle_command(text, memory, history, reminders):
     m = re.search(r"\b(?:share|send|download|export|print)\b.*?\b(?:my\s+|the\s+)?([a-z]+?)(?:\s*list)?"
                   r"(?:\s+(?:to|with|on)\b.*)?$", lower)
     if m and ("list" in lower or list_name(m.group(1)) in known_lists):     # any list, even "my schedule"
-        name = list_name(m.group(1))
+        name = next((list_name(w) for w in re.findall(r"[a-z]+", lower) if list_name(w) in known_lists),
+                    list_name(m.group(1)))                 # a list name anywhere in the sentence wins
         _last_list = name
         items = memory.list_get(name)
         if not items:
@@ -1272,6 +1352,22 @@ def handle_command(text, memory, history, reminders):
             "📝 lists (on device)")
         return True
    
+
+    # "How many eggs do I have?" / "how many eggs are on my grocery list?": counted from the list, never added
+    m = re.search(r"\bhow many ([a-z]+(?: [a-z]+)?) (?:do i (?:have|need)|are (?:there|on|in|left)|is (?:there|on|in)"
+                  r"|have i got|left|on my|in my)\b", lower)
+    if m:
+        target = next((list_name(w) for w in re.findall(r"[a-z]+", lower) if list_name(w) in known_lists), None) \
+            or _last_list or "grocery"
+        _last_list = target
+        hit = find_item(target, m.group(1))
+        if hit and hit[1]:
+            say(f"You have {hit[0]} on your {target} list.", "📝 lists (on device)")
+        elif hit:
+            say(f"{hit[2][:1].upper() + hit[2][1:]} is on your {target} list, with no number.", "📝 lists (on device)")
+        else:
+            say(f"There are no {m.group(1)} on your {target} list.", "📝 lists (on device)")
+        return True
 
     m = re.search(r"\bwhat(?:'s| is) (?:on|in) (?:my\s+|the\s+)?([a-z ]+?)\s*list\b"
                   r"|\b(?:show|display|read)(?: me)? (?:my\s+|the\s+)?([a-z ]+?)\s*list\b", lower)
@@ -1343,7 +1439,7 @@ def handle_command(text, memory, history, reminders):
     # ----- About Jarvis -----
     if re.match(r"(?:who are you|what(?:'s| is) your name|introduce yourself)\b"
                 r"(?!\s+(?:talking|speaking|interacting|chatting))", lower):
-        say(INTRO, f"🙂 about {ASSISTANT_NAME}", tone="bright")
+        say(INTRO, f"🙂 about {ASSISTANT_NAME}")
         return True
 
     if re.match(r"(what can you do|what are your features|how can you help)", lower):
@@ -1378,6 +1474,30 @@ def handle_command(text, memory, history, reminders):
             "⚙️ city (on device)")
         return True
 
+    # "Where are my keys?": read the NEWEST thing they told me, directly (no guessing, no mixing old and new places)
+    m_where = re.match(r"where(?:'s| is| are| did i (?:put|keep|leave))? my ([a-z]+?)(?:s)?\b", lower)
+    if m_where:
+        noun = m_where.group(1)
+        hits = [t for t in memory.all() if re.search(rf"\bmy {noun}s?\b", t.split(" (saved on")[0], re.I)]
+        if hits:
+            core = re.sub(r"\s*\[date:.*?\]", "", hits[-1].split(" (saved on")[0]).strip().rstrip(".")
+            core = re.sub(r"\bmy\b", "your", core, flags=re.I)
+            say(f"You told me: {core}.", "📚 memory (read directly)")
+            return True
+
+    # "Now my keys are in the kitchen": a new place is saved, and it wins over the old one
+    m_place = re.match(r"(?:now|no|actually|okay)?[,\s]*(?:my|the) ([a-z]+) (is|are) (?:now |kept )?"
+                       r"((?:in|under|on|inside|behind|near|next to) .+?)[.!]*$", lower)
+    if m_place and not re.search(r"\d|\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday"
+                                 r"|sunday|january|february|march|april|may|june|july|august|september|october"
+                                 r"|november|december|morning|evening|week|month|time|list|name|city)\b", lower):
+        fact = f"my {m_place.group(1)} {m_place.group(2)} {m_place.group(3)}"
+        memory.add(f"{fact} (saved on {date.today():%A, %d %B %Y})")
+        print(f"💾 Saved: {fact}")
+        say(f"Okay, I'll remember that your {m_place.group(1)} {m_place.group(2)} {m_place.group(3)}.",
+            "💾 saved to memory")
+        return True
+
     # ----- Memory -----
     if lower.startswith("remember"):
         fact = text[len("remember"):].strip(" ,.")
@@ -1388,6 +1508,9 @@ def handle_command(text, memory, history, reminders):
             return True
         if is_unsafe(fact):
             say(REFUSAL, "🛡️ not saved (safety)", tone="gentle")
+            return True
+        if any(t.split(" (saved on")[0].strip(" .").lower() == fact.strip(" .").lower() for t in memory.all()):
+            say("I already have that saved.", "💾 memory")
             return True
         fact = resolve_dates(fact)                                   # 1. real date first
         fact = f"{fact} (saved on {date.today():%A, %d %B %Y})"     # 2. then when it was saved
@@ -1410,6 +1533,15 @@ def handle_command(text, memory, history, reminders):
         say("Done. I've erased everything I had saved, including my working memory.", "🧹 everything erased")
         return True
 
+    # "Forget it" / "never mind" only deletes a memory right after one was saved; otherwise it just means "cancel"
+    _asked = _last_said.rstrip().endswith("?")              # Jarvis had just asked something
+    _about_memory = "I'll remember" in _last_said or _last_said.startswith("You told me")
+    if re.fullmatch(r"(?:forget (?:it|that|about it)|never ?mind|leave it)", lower) \
+            and (_asked or not _about_memory or not lower.startswith("forget")) \
+            and not (lower.startswith("forget that") and not _asked):
+        say("Okay, never mind.", "👌 cancelled")
+        return True
+
     if lower.startswith("forget that") or lower == "forget it":
         removed = memory.forget_last()
         del history[1:]          # also wipe chat history so it truly forgets
@@ -1428,7 +1560,19 @@ def handle_command(text, memory, history, reminders):
         else:
             print("📋 Memories:\n" + "\n".join(f"- {t}" for t in items))
             clean = [re.sub(r"\s*\[date: (.*?)\]", r", on \1", t.split(" (saved on")[0]) for t in items]
-            say(f"I have {len(items)} things saved. " + ". ".join(clean), "📋 memory list")
+            seen, uniq = set(), []
+            for c in reversed(clean):        # newest first: skip repeats, broken bits ("I want you to"), old places
+                k = c.lower().strip(" .")
+                place = re.match(r"my (\w+?)s? (?:is|are) (?:in|under|on|inside|behind|near|next to)\b", k)
+                if place:
+                    k = "place:" + place.group(1)                 # "my key is in the kitchen" replaces "... under the rug"
+                if k in seen or len(c.split()) < 3 or re.search(r"\b(?:to|you|that|the|a)$", c.lower().strip(" .")):
+                    continue
+                seen.add(k)
+                uniq.insert(0, c)
+            latest = uniq[-6:]
+            say(f"I have {len(uniq)} things saved. " + ("The latest ones: " if len(uniq) > 6 else "")
+                + ". ".join(latest) + ".", "📋 memory list")
         return True
 
     return False
@@ -1609,6 +1753,59 @@ def main():
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        # "I said ...", "I want you to remember ...", "Can you please add ...": straight to the command
+        text = re.sub(r"^(?:i said|i mean|i asked|i'?m saying|i am saying|i'?m asking)[,\s]+", "", text, flags=re.I)
+        text = re.sub(r"^(?:(?:i want you to|i'd like you to|i need you to|can you|could you|will you|would you|please)\s+)+"
+                      r"(?=(?:remember|add|put|remove|delete|clear|set|share|send|log|cancel|show|close)\b)",
+                      "", text, flags=re.I)
+        # Misheard or roundabout commands -> the plain command
+        text = re.sub(r"^(?:but|and|so|also|okay|ok)[,\s]+(?=\w)", "", text, flags=re.I)
+        text = re.sub(r"^(?:sutter|setter|sutta|sadder|said a|set her|set up(?: a)?|setup(?: a)?)\s+(?:a\s+)?(?=reminder\b)",
+                      "set a ", text, flags=re.I)
+        m_buy = re.match(r"(?:i\s+)?(?:need|have|want|got)\s+to\s+(?:buy|get|pick up)\s+(.+?)[.!]*$", text, flags=re.I)
+        if m_buy and not re.search(r"\b(?:list|online|where|how|why|when|gift|present|ticket)\b", m_buy.group(1), re.I):
+            text = f"add {m_buy.group(1)} to my grocery list"
+        if re.fullmatch(r"(?:\w+\s+){0,2}(?:the\s+)?time(?:\s+(?:is it|now|please))?(?:\s+\w+){0,4}[.?!]*", text, flags=re.I) \
+                and not re.search(r"\b(?:focus|timer|break|spend|free|long|first|last|next|every|some|this|that|good time|no see)\b",
+                                  text, re.I):
+            text = "what time is it"
+        # "I'm Krati back" / "Krati is back" / "it's Krati" while a guest is talking -> the user is back
+        _user = memory.get_setting("user_name")
+        if _guest and _user and re.search(
+                rf"\b(?:i'?m|i am|it'?s|this is)\b[^.?!]*\b{re.escape(_user)}\b(?!['’]s)|\b{re.escape(_user)} (?:is )?(?:here|back)\b",
+                text, re.I):
+            text = f"I'm {_user}"
+        # More everyday ways of saying commands (7:50 PM test)
+        _me = memory.get_setting("user_name") or ""
+        if _me:                                              # "I'm Karthi's friend Dria" -> Krati's friend
+            text = re.sub(r"\b([A-Z][a-z]+)(?=['’]s (?:friend|sister|brother|mom|mother|dad|father|colleague|cousin"
+                          r"|wife|husband)\b)", lambda m: _me if m.group(1) != _me and SequenceMatcher(
+                              None, m.group(1).lower(), _me.lower()).ratio() >= 0.7 else m.group(1), text)
+        text = re.sub(r"[,\s]+(?:jarvis|jharis|joris|john|janice)[.!?]*$", "", text, flags=re.I)
+        text = re.sub(r"^(?:i (?:am|was) (?:saying|telling you)|i'?m (?:saying|telling you)|i said|i mean)(?: that)?[,\s]+",
+                      "", text, flags=re.I)
+        text = re.sub(r"^(?:i (?:have|'ve)?\s*(?:already |just )?|i'?ve (?:already |just )?)(?:bought|purchased)\b",
+                      "I bought", text, flags=re.I)
+        text = re.sub(r"\b(?:my toes|to matters|two matters|tomatos)\b", "tomatoes", text, flags=re.I)
+        text = re.sub(r"\bperiods\b", "period", text, flags=re.I)
+        text = re.sub(r"\bwhat(?:'s| is) the (?:plan|plans|plant|plants) for\b", "what is planned for", text, flags=re.I)
+        text = re.sub(r"\bfocus on (\d+) (minutes?|mins?)\b", r"focus for \1 \2", text, flags=re.I)
+        if re.fullmatch(r"(?:the )?focus (?:stopped|off|ended|is over|done)[.!]*", text, flags=re.I):
+            text = "stop focus"
+        _when = (r"\b(?:today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend"
+                 r"|next week|\d{1,2}[:.]\d{2}|\d{1,2} ?(?:am|pm|a\.m\.|p\.m\.))\b")
+        m_sched = re.match(r"(?:yes,?\s*|remember that\s*)?(.+?)[,.]?\s*(?:please\s+)?(?:save|put|add|note) (?:it|this|that)"
+                           r"(?:\s+(?:in|to|on|into) (?:my )?schedule(?: list)?)?[.!]*$", text, flags=re.I)
+        if m_sched and (re.search(r"\bschedule\b", text, re.I) or re.search(_when, m_sched.group(1), re.I)):
+            event = re.sub(r"^(?:i'?m|i am|i have|i've got|there'?s|we have)\s+", "", m_sched.group(1).strip(" ,."),
+                           flags=re.I)
+            text = f"add {event} to my schedule"
+        elif re.match(r"add (?:a |an |my )?(?:meeting|appointment|call|class|interview|party|dinner|lunch)\b", text, re.I) \
+                and not re.search(r"\b(?:to|in|into|on) (?:my|the) \w+(?: list)?[.!]*$|\blist\b", text, re.I):
+            text = text.rstrip(" .!") + " to my schedule"
+        elif re.fullmatch(r"add ([a-z ]+?)[.!]*", text, flags=re.I) and len(text.split()) <= 4 \
+                and not re.search(r"\b(?:to|in|into|on|list)\b", text, re.I):
+            text = text.rstrip(" .!") + " to my grocery list"
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
 
        # Never help hurt anyone: a calm, firm answer from code (never the LLM, never online)
@@ -1636,6 +1833,10 @@ def main():
             continue
 
  
+        # The emergency banner stays while it's useful, then clears once the talk has moved on
+        if dashboard.STATE.get("emergency") and time.time() - (dashboard.STATE.get("emergency_at") or 0) > 45:
+            dashboard.update(emergency=None)
+
         # Meeting mode: "meeting mode on", and the yes/no questions after the meeting
         plan = handle_meeting(text, memory)
         if plan:
@@ -1742,6 +1943,7 @@ def main():
         one_word = len(text.split()) <= 1
         if (END_CONVERSATION.search(text.lower()) or short_by) and not (is_active() and one_word):
             say("Okay, talk soon!", "👋 conversation ended", tone="bright")
+            dashboard.update(emergency=None)
             _guest = None
             follow_up, chime_next = False, False
             continue
@@ -1754,6 +1956,29 @@ def main():
             continue
 
         # Focus & Energy: sessions, breaks, pause/resume (no LLM)
+        text = re.sub(r"\bfocus (?:on|for) (\d+) (minutes?|mins?) on\b", r"focus for \1 \2 on", text, flags=re.I)
+        # Quick answers from code (no LLM): thanks, date + time, games said casually
+        low = text.lower().strip(" .!?,")
+        if re.fullmatch(r"(?:ok(?:ay)?,?\s*)?(?:thank you|thanks|thank u|thx)(?: so much| a lot| very much)?"
+                        r"(?:,?\s*(?:jarvis|john|janice))?", low):
+            say(random.choice(["You're welcome!", "Anytime!", "Happy to help!"]), "🙂 small talk (on device)", tone="bright")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+        if re.search(r"\b(?:today|date|day)\b", low) and re.search(r"\btime\b", low) and re.match(r"(?:what|tell)", low):
+            now = datetime.now()
+            say(f"Today is {now:%A}, {now.day} {now:%B %Y}, and it's {now.strftime('%I:%M %p').lstrip('0')}.",
+                "🕒 date and time (on device)")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+        if is_active() and re.search(r"\b(?:don'?t want to play|not now|no more|enough|quit|end the game|stop playing)\b", low):
+            text = "stop"                                    # the game's own "stop" ends it cleanly
+        elif re.search(r"\b(?:good|nice|great|fun) game\b|\bwell played\b|\bthat was (?:fun|good|great)\b", low):
+            say("I enjoyed it too! Say, let's play a game, whenever you want another round.", "🎮 game (on device)",
+                tone="bright")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+        skip_game = bool(re.search(r"\bhow are you\b|\bjoke\b", low)) and not re.search(r"\b\d\b", low)
+
         plan = handle_focus(text, memory)
         if plan:
             run_plan(plan, hear)
@@ -1761,7 +1986,7 @@ def main():
             continue
 
         # Games: while one is running, it gets the first say (emergencies still come first)
-        act = handle_activity(text)
+        act = handle_activity(text) if not skip_game else None
         if act:
             dashboard.update(activity=act["screen"])
             say(act["say"], "🎮 game (on device)", tone="bright")
@@ -1825,7 +2050,7 @@ def main():
                 continue
 
         # Questions about the user's name: answer from the saved setting, never from the LLM
-        if re.search(r"\b(what(?:'s| is) my name|who am i|who is the (?:current )?user)\b", text.lower()):
+        if re.search(r"\b(what(?:'s| is) my name|who am i|who is the (?:current )?user|(?:tell|say|know) (?:me )?my name)\b", text.lower()):
             name = memory.get_setting("user_name")
             say(f"You're {name}." if name else "I don't know your name yet. You can say, my name is...",
                 "⚙️ name (on device)")
@@ -1968,7 +2193,7 @@ def main():
             continue
 
         # "I am a female, please save it" / "My blood group is O positive, remember that" -> save the first part
-        m = re.match(r"^(.*?)[,.!]?\s*(?:please\s+)?(?:save|remember|note)(?: down)? (?:it|this|that)\b", text, re.I)
+        m = re.match(r"^(.*?)[,.!]?\s*(?:please\s+)?(?:save|remember|note)(?: down)? (?:it|this|that)\b[.!]?\s*$", text, re.I)
         if m and len(m.group(1).split()) >= 2 and not is_unsafe(m.group(1)):
             fact = strip_address(m.group(1).strip(" ,.!"))
             memory.add(f"{fact} (saved on {date.today():%A, %d %B %Y})")
@@ -2045,13 +2270,15 @@ def main():
         wants_lists = category == "lists" and score >= GATE_THRESHOLD and on_topic
         wants_online = category in ("get_weather", "get_news") and score >= GATE_THRESHOLD and not found and on_topic   
         # The gate is sure and the sentence has a weather/news word: call the tool directly, no router (saves 2-4 s)
-        if wants_online and (score >= STRONG_GATE or (category == "get_weather" and re.search(
-                r"\b(?:weather|forecast|temperature)\b", lower_t))):
+        if wants_online and (score >= STRONG_GATE or re.search(
+                r"\b(?:weather|forecast|temperature|news|headlines)\b", lower_t)):
             args = {}
             if category == "get_weather":
                 m = re.search(r"\b(?:in|at|for) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)\b", text)
                 args = {"city": m.group(1) if m else "", "day": "tomorrow" if "tomorrow" in lower_t else "today"}
             tool_reply = run_tool_call(category, args, memory.get_setting("home_city"))
+            if tool_reply and re.search(r"\b(?:umbrella|raincoat)\b", lower_t):
+                tool_reply = umbrella_answer(tool_reply)
             if tool_reply:
                 print(f"🧭 Router skipped: the gate is sure → {category} {args}")
                 say(tool_reply, "🌐 internet (gate)")
@@ -2063,6 +2290,11 @@ def main():
                 call = {"name": category, "arguments": {}}
                 print(f"🚦 Router hesitated, gate is confident → {category}")
             print(f"🧭 Router: {call['name'] + ' ' + str(call.get('arguments')) if call else 'no tool'}  ({time.time() - t1:.1f}s)")
+            if call and call["name"] in LIST_TOOL_NAMES and re.match(
+                    r"(?:how|what|which|when|where|why|is|are|do|does|did)\b", lower_t) \
+                    and not call["name"].startswith(("show", "get", "list", "read")):
+                print(f"   (ignored the router: a question can't change a list: {call['name']})")
+                call = None
             if call:
                 args = call.get("arguments") or {}
                 if isinstance(args, str):
@@ -2114,6 +2346,20 @@ def main():
         kept = [s for s in re.split(r"(?<=[.!?])\s+", reply)
                 if not re.search(r"computer program|don'?t (?:feel|have) (?:any )?emotions|as an ai|language model", s.lower())]
         reply = " ".join(kept) or "I'm Jarvis, right here with you."
+        # Drop tacked-on filler ("If you have any other questions, feel free to ask.") when there's a real answer
+        core = [s for s in re.split(r"(?<=[.!?])\s+", reply) if not re.search(
+            r"^(?:if you (?:have|need) any|feel free to|is there anything (?:else|specific)|how can i (?:help|assist)"
+            r"|let me know if|what can i (?:help|do) (?:you )?with)", s.strip().lower())]
+        if core:
+            reply = " ".join(core)
+        # Don't repeat a line already said in recent answers ("Safe and sound!" every time)
+        parts = [s for s in re.split(r"(?<=[.!?])\s+", reply) if s.strip()]
+        said_before = {s.strip().lower() for m in history[-8:] if m["role"] == "assistant"
+                       for s in re.split(r"(?<=[.!?])\s+", m["content"])}
+        fresh = [s for s in parts if s.strip().lower() not in said_before]
+        if fresh and len(fresh) < len(parts):
+            print(f"   (dropped a repeated line: {[s for s in parts if s not in fresh]})")
+            reply = " ".join(fresh)
         # A reply cut off mid-sentence: keep only the complete sentences
         if reply and reply[-1] not in ".!?":
             cut = max(reply.rfind(". "), reply.rfind("! "), reply.rfind("? "))
@@ -2175,6 +2421,21 @@ def main():
             print(f"   (blocked made-up weather: {reply})")
             reply = "I haven't checked the weather yet. Just ask me, what's the weather, and I'll look it up."
             route_name = "🛡️ made-up weather blocked"
+
+        # The command parser didn't catch a reminder, so the LLM must not pretend it set one ("Got it, ...")
+        if route_name.startswith(("🧠", "📚")) and re.search(
+                r"\bremind me\b|\b(?:set|add|create|make|sutter|setter)\b.*\breminders?\b", text.lower()):
+            print(f"   (blocked fake reminder: {reply})")
+            reply = "I didn't catch that as a reminder. Say it like this: remind me at 7 pm to call my father."
+            route_name = "🛡️ false promise blocked"
+
+        # "Sure, I can add that" from the LLM adds nothing: say how to really do it
+        if route_name.startswith(("🧠", "📚")) and re.search(
+                r"\b(?:i can|i'll|i will|let me|sure,? i'?ll) (?:add|save|put|schedule|note)\b", reply.lower()):
+            print(f"   (blocked fake add: {reply})")
+            reply = ("I didn't save that. Say it like this: add a meeting tomorrow at 2:30 to my schedule, "
+                     "or: add milk to my grocery list.")
+            route_name = "🛡️ false promise blocked"
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(

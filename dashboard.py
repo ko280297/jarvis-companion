@@ -4,6 +4,7 @@ and closing a card (like a QR code). Only these four actions exist, and only thi
 import json
 import queue
 import threading
+import time
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +19,8 @@ PORT = 8000
 
 
 def update(**changes):
+    if changes.get("emergency"):
+        changes["emergency_at"] = time.time()      # so it can clear once the talk moves on
     STATE.update(changes)
 
 
