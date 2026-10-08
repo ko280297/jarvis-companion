@@ -1,14 +1,27 @@
+# Python
 .venv/
 __pycache__/
-memories.db
+*.pyc
+
+# Personal data: never pushed (privacy!)
+*.db
+*.db-journal
 online_log.jsonl
-*.log
-en_GB-alan-medium.*
-en_US-joe-medium.*
-en_US-lessac-medium.*
-session_log.txt
+*.jsonl
+*_backup*
+
+# Big model files (download them instead, see README)
+*.onnx
+*.onnx.json
+*.bin
+*.gguf
+models/
+
+# Patch backups and one-time fix scripts
 *.bak*
-*.testbackup
 apply_fixes*.py
-scenarios_log.txt
-session_log.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
