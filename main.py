@@ -71,8 +71,9 @@ if "--log" in sys.argv:
     sys.stdout = _Tee(sys.stdout, open("session_log.txt", "a", encoding="utf-8"))
 
 # ---------- Audio ----------
+STT_THREADS = max(4, min(8, os.cpu_count() or 4))   # more threads = faster speech-to-text
 STT_MODEL = "base.en"           # everyday commands: fast
-MEETING_STT_MODEL = "small.en"  # meetings: slower, but hears names and accents much better
+MEETING_STT_MODEL = "base.en"  # meetings: slower, but hears names and accents much better
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
 MAX_RECORD_SECONDS = 20    # longest question allowed
@@ -411,6 +412,9 @@ def fresh_idea(avoid=()):
     return line[0].lower() + line[1:]
 
 _last_ack = None
+_EXERCISE = {"plan": None}   # a breathing exercise that was offered, waiting for 'yes'
+EXPLICIT_EXERCISE = re.compile(r"\b(?:help me (?:calm|relax|breathe)|calm me|let'?s (?:do|try|start)|breath|breathe"
+                               r"|exercise|grounding|butterfly|sigh|meditat)")
 
 
 def split_items(text):
@@ -442,6 +446,14 @@ def play_sequence(colours, screen):
 
 
 def run_plan(plan, hear=None):
+    """Run the plan, then clear an exercise card (🌿) so it doesn't stay on the screen afterwards."""
+    _run_plan_steps(plan, hear)
+    act = dashboard.STATE.get("activity") or {}
+    if str(act.get("title", "")).startswith("🌿"):
+        dashboard.update(activity=None)
+
+
+def _run_plan_steps(plan, hear=None):
     """Carry out a plan: things to say, timed breathing cues, listening steps and screen updates.
     hear(seconds) -> what the user said ('' if nothing, None if an emergency took over)."""
     global _last_ack
@@ -462,7 +474,12 @@ def run_plan(plan, hear=None):
                                        "breath": {"phase": phase, "seconds": secs, "id": time.time()}})
             started = time.time()
             speak(cue, "gentle")
-            time.sleep(max(0, secs - (time.time() - started)))
+            while time.time() - started < secs:
+                if not dashboard.ACTIONS.empty():          # a tap on the screen stops the exercise
+                    dashboard.update(activity=None)
+                    say("Okay, we'll stop here. I'm here whenever you need me.", "🌿 wellbeing (on device)", tone="gentle")
+                    return
+                time.sleep(0.1)
         elif kind == "ask":                                # listen and count: shown on screen, never saved
             _, secs, name, line, acks, count = step
             items, tries = [], 0
@@ -1596,7 +1613,7 @@ def main():
         openwakeword.utils.download_models()         # only needed the very first time
         wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
     step("wake word")
-    stt = SttModel(STT_MODEL, n_threads=4, print_progress=False)
+    stt = SttModel(STT_MODEL, n_threads=STT_THREADS, print_progress=False)
     meeting_stt = None                               # loaded the first time meeting mode starts
     step("speech to text")
     memory = MemoryStore()
@@ -1664,7 +1681,8 @@ def main():
             dashboard.update(status="listening", activity=meeting_screen())
             if meeting_stt is None:
                 print("   (loading the meeting speech model...)")
-                meeting_stt = SttModel(MEETING_STT_MODEL, n_threads=4, print_progress=False)
+                meeting_stt = stt if MEETING_STT_MODEL == STT_MODEL else SttModel(
+                    MEETING_STT_MODEL, n_threads=STT_THREADS, print_progress=False)
             if recorder is None:
                 recorder = MeetingRecorder(level=max(_threshold * 0.5, 150))
                 print("   🎙️ (meeting: recording non-stop, cut at natural pauses)")
@@ -1781,6 +1799,10 @@ def main():
             text = re.sub(r"\b([A-Z][a-z]+)(?=['’]s (?:friend|sister|brother|mom|mother|dad|father|colleague|cousin"
                           r"|wife|husband)\b)", lambda m: _me if m.group(1) != _me and SequenceMatcher(
                               None, m.group(1).lower(), _me.lower()).ratio() >= 0.7 else m.group(1), text)
+            # "I'm Pratish friend Rhea" (no 's, name misheard) -> "I'm Krati's friend Rhea"
+            text = re.sub(r"\b(?:i'?m|i am|this is)\s+([A-Za-z]+)(?:['’]s)?\s+(friend|sister|brother|cousin|colleague)\b",
+                          lambda m: f"I'm {_me}'s {m.group(2)}" if SequenceMatcher(
+                              None, m.group(1).lower(), _me.lower()).ratio() >= 0.6 else m.group(0), text, flags=re.I)
         text = re.sub(r"[,\s]+(?:jarvis|jharis|joris|john|janice)[.!?]*$", "", text, flags=re.I)
         text = re.sub(r"^(?:i (?:am|was) (?:saying|telling you)|i'?m (?:saying|telling you)|i said|i mean)(?: that)?[,\s]+",
                       "", text, flags=re.I)
@@ -1788,6 +1810,24 @@ def main():
                       "I bought", text, flags=re.I)
         text = re.sub(r"\b(?:my toes|to matters|two matters|tomatos)\b", "tomatoes", text, flags=re.I)
         text = re.sub(r"\bperiods\b", "period", text, flags=re.I)
+        text = re.sub(r"^(?:tell me |show me )?what(?:'s| is)(?: there)? (?:in|on) my (?:tasks?|to-?dos?)(?: list)?[?.!]*$",
+                      "show my task list", text, flags=re.I)
+        # Period tracker, said or heard differently (midnight test)
+        text = re.sub(r"\b(?:lock|lug|look)\b,?(?=\s+(?:cramps?|grams|headaches?|bloating|loading|mood|symptoms?|period)\b)",
+                      "log", text, flags=re.I)
+        text = re.sub(r"^log,\s*", "log ", text, flags=re.I)
+        text = re.sub(r"\blog grams\b", "log cramps", text, flags=re.I)
+        text = re.sub(r"\bcramps and loading\b", "cramps and bloating", text, flags=re.I)
+        text = re.sub(r"\bperiod crimes\b", "period cramps", text, flags=re.I)
+        text = re.sub(r"\bpsycho summary\b", "cycle summary", text, flags=re.I)
+        text = re.sub(r"^format period\b", "for my period", text, flags=re.I)
+        text = re.sub(r"(\bperiod reminders?\b.*\bsay),\s*", r"\1 ", text, flags=re.I)
+        text = re.sub(r"\b(headache|cramp|migraine|craving|mood swing)(?= before my period)", r"\1s", text, flags=re.I)
+        text = re.sub(r"\bI burn (my|the)\b", r"I burned \1", text, flags=re.I)
+        text = re.sub(r"\b(?:screened|sprayed|sprang|spring) my (ankle|wrist|foot|knee)\b", r"sprained my \1", text,
+                      flags=re.I)
+        text = re.sub(r"^(?:tell me |say )?(?:another|one more)(?: one| joke)?(?: please)?[.!?]*$", "tell me another joke", text,
+                      flags=re.I)
         text = re.sub(r"\bwhat(?:'s| is) the (?:plan|plans|plant|plants) for\b", "what is planned for", text, flags=re.I)
         text = re.sub(r"\bfocus on (\d+) (minutes?|mins?)\b", r"focus for \1 \2", text, flags=re.I)
         if re.fullmatch(r"(?:the )?focus (?:stopped|off|ended|is over|done)[.!]*", text, flags=re.I):
@@ -1798,6 +1838,8 @@ def main():
                            r"(?:\s+(?:in|to|on|into) (?:my )?schedule(?: list)?)?[.!]*$", text, flags=re.I)
         if m_sched and (re.search(r"\bschedule\b", text, re.I) or re.search(_when, m_sched.group(1), re.I)):
             event = re.sub(r"^(?:i'?m|i am|i have|i've got|there'?s|we have)\s+", "", m_sched.group(1).strip(" ,."),
+                           flags=re.I)
+            event = re.sub(r"\b(?:on |this |the )*(?<!next )weekend\b", "on Saturday", event,  # weekend is saved as Saturday
                            flags=re.I)
             text = f"add {event} to my schedule"
         elif re.match(r"add (?:a |an |my )?(?:meeting|appointment|call|class|interview|party|dinner|lunch)\b", text, re.I) \
@@ -1930,7 +1972,28 @@ def main():
 
         # Wellbeing. During a thought dump: did the recording end because they paused (not because 60 s ran out)?
         paused = not venting or len(audio) < (60 - 1) * SAMPLE_RATE
+        # Exercises are offered first, not started straight away: the answer to 'Shall we start?'
+        if _EXERCISE["plan"]:
+            rest, _EXERCISE["plan"] = _EXERCISE["plan"], None
+            low_e = text.lower().strip(" .!?,")
+            if re.match(r"(?:yes|yeah|yep|sure|ok(?:ay)?|let'?s (?:do it|go|start)|go ahead|please|start)\b", low_e):
+                run_plan(rest, hear)
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+            if re.match(r"(?:no|nope|not now|maybe later|later|no thanks)\b", low_e):
+                say("Okay. I'm here whenever you need me.", "🌿 wellbeing (on device)", tone="gentle")
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
         plan = handle_wellbeing(text, memory, paused=paused)
+        if plan and not EXPLICIT_EXERCISE.search(text.lower()):
+            first_cue = next((i for i, s in enumerate(plan) if s[0] == "cue"), None)
+            first_say = next((i for i, s in enumerate(plan) if s[0] == "say"), None)
+            if first_cue is not None:
+                start = first_say if first_say is not None and first_say < first_cue else first_cue
+                intro = (re.split(r"(?<=[.!?])\s", plan[start][1])[0].rstrip(".!")
+                         if plan[start][0] == "say" else "We can do a short breathing exercise")
+                _EXERCISE["plan"] = plan[start:]
+                plan = plan[:start] + [("say", f"{intro}, if you'd like. Shall we start?", "gentle")]
         if plan:
             dashboard.update(last_heard="(private)")
             run_plan(plan, hear)
@@ -2391,7 +2454,8 @@ def main():
             text.lower())
         about_assistant = re.search(r"\b(you|your|yourself)\b", text.lower())
         if not found and not declined and is_question and not about_assistant and not looped \
-                and confidence < CONFIDENCE_THRESHOLD:
+                and confidence < (0.70 if re.match(r"(?!.*\b(?:my|your|me|i)\b)what(?:'s| is| are) (?:an? |the )?[a-z]+(?: [a-z]+){0,2}[?.!]*$",
+                                                   text.lower().strip()) else CONFIDENCE_THRESHOLD):
             print(f"   (withheld guess: {reply})")
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."

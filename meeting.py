@@ -9,7 +9,7 @@ from safety import is_unsafe
 from tools import resolve_dates
 
 SCHEDULE_LIST = next((n for n in STARTER_LISTS if n.startswith("sched")), "schedule")
-TASKS_LIST = "tasks"
+TASKS_LIST = "task"  # the same name the list commands use ("tasks" -> "task")
 
 START = re.compile(r"\bmeeting mode (?:on|start)\b|\b(?:start|turn on|begin|switch on) (?:the )?meeting mode\b")
 STOP = re.compile(r"\bmeeting mode (?:off|of|stop|end)\b|\b(?:stop|end|turn off|switch off|close) (?:the )?meeting mode\b"
