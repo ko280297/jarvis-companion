@@ -9,6 +9,8 @@ from difflib import SequenceMatcher
 EXIT = re.compile(
     r"\b(?:stop|quit|exit|end|close)\b.*\b(?:game|games|quiz|playing|math)\b|\bi(?:'m| am) done playing\b"
     r"|^(?:stop|quit|exit|enough)\b|\bend this\b|\bnot interested\b|\bsaying stop\b|\bstop it\b")
+GIVE_UP = re.compile(r"\b(?:give|gave|giving|given)\s+(?:it\s+|this\s+)?up\b|\bi (?:quit|surrender)\b"
+                     r"|\bi can'?t (?:get|guess) it\b")
 LIST_GAMES = re.compile(r"\b(?:what|which) games\b|\bgames? (?:can|do) you\b")
 PLAY = re.compile(r"\b(?:play|game|let'?s do|start|begin)\b")
 PLAY_AGAIN = re.compile(r"\b(?:play|go) (?:it |that )?again\b|\bone more (?:time|game|round)\b")
@@ -38,7 +40,14 @@ def parse_number(lower):
             total, found = total + ONES[w], True
         elif w == "hundred":
             total, found = (total or 1) * 100, True
-    return total if found else None
+    if found:
+        return total
+    heard = [MISHEARD[w] for w in re.findall(r"[a-z]+", lower) if w in MISHEARD]
+    return heard[-1] if heard else None
+
+
+MISHEARD = {"fix": 6, "sicks": 6, "sax": 6, "sex": 6, "tree": 3, "free": 3, "ate": 8, "nein": 9, "won": 1,
+            "tin": 10, "fore": 4}
 
 
 def _duration(seconds):
@@ -81,7 +90,7 @@ class TicTacToe(Activity):
              "the middle right", "the bottom left", "the bottom middle", "the bottom right"]
     SOUNDS_LIKE = {"one": 1, "won": 1, "two": 2, "to": 2, "too": 2, "doo": 2, "do": 2, "due": 2,
                    "three": 3, "tree": 3, "four": 4, "for": 4, "five": 5, "fine": 5, "bye": 5, "by": 5,
-                   "buy": 5, "hive": 5, "fife": 5, "six": 6, "sex": 6, "seven": 7, "eight": 8, "ate": 8,
+                   "buy": 5, "hive": 5, "fife": 5, "six": 6, "sex": 6, "fix": 6, "sicks": 6, "sax": 6, "seven": 7, "eight": 8, "ate": 8,
                    "nine": 9, "nein": 9}
     MISTAKES = {"easy": 0.6, "medium": 0.25, "hard": 0.0}   # how often Jarvis plays a random move
 
@@ -338,7 +347,7 @@ class NumberGuess(Activity):
         return f"I'm thinking of a number between {self.low} and {self.high}. Say a number to guess."
 
     def handle(self, lower):
-        if re.search(r"\b(?:give up|tell me the (?:number|answer)|reveal)\b", lower):
+        if GIVE_UP.search(lower) or re.search(r"\b(?:tell me the (?:number|answer)|reveal|what was it)\b", lower):
             return f"No problem! It was {self.secret}. Good try!", True
         n = parse_number(lower)
         if n is None:
@@ -432,7 +441,7 @@ def handle_activity(text):
     lower = text.lower().strip(" .!?,")
 
     if _current:
-        if EXIT.search(lower):
+        if (EXIT.search(lower) or GIVE_UP.search(lower)) and not (isinstance(_current, NumberGuess) and GIVE_UP.search(lower)):
             name = _current.name
             _current = None
             return {"say": f"Okay, we stopped {name}. That was fun!", "screen": None}

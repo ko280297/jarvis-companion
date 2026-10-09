@@ -124,6 +124,16 @@ class MemoryStore:
         self.db.commit()
         return True
 
+    def list_remove_exact(self, name, item):
+        """Remove exactly this entry (its oldest copy), never a different item that only contains the words."""
+        row = self.db.execute(
+            "SELECT id FROM list_items WHERE list = ? AND item = ? ORDER BY id LIMIT 1", (name, item)).fetchone()
+        if not row:
+            return False
+        self.db.execute("DELETE FROM list_items WHERE id = ?", (row[0],))
+        self.db.commit()
+        return True
+
     def list_clear(self, name):
         self.db.execute("DELETE FROM list_items WHERE list = ?", (name,))
         self.db.commit()

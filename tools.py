@@ -70,6 +70,8 @@ def answer_time_question(text):
         ahead = (target - today.weekday()) % 7 or 7
         return f"Next {m.group(1).title()} is {_fmt(today + timedelta(days=ahead))}."
 
+    if "day after tomorrow" in t:
+        return f"The day after tomorrow is {_fmt(today + timedelta(days=2))}."
     if "tomorrow" in t:
         return f"Tomorrow is {_fmt(today + timedelta(days=1))}."
     if "yesterday" in t:

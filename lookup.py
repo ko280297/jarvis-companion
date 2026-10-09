@@ -53,6 +53,8 @@ def _topic(question, private_names):
     q = question.lower().strip(" ?.!")
     if is_unsafe(q):
         return None, "unsafe"
+    if re.match(r"(?:how (?:to|do|can|should|would|could) |ways to |steps to |tips (?:to|for) )", q):
+        return None, "howto"
     if PERSONAL.search(q) or any(n and re.search(rf"\b{re.escape(n.lower())}\b", q) for n in private_names):
         return None, "personal"
     m = MEANING.search(q)
@@ -103,6 +105,9 @@ def _lookup(question, private_names):
         if why == "unsafe":
             _log("blocked", attempted="(an unsafe request)")
             return "I won't look that up. I can't help with anything that could hurt someone.", "🛡️ search blocked (safety)"
+        if why == "howto":
+            return ("I only look up facts, like who or what something is, not how-to steps. "
+                    "Try asking: who is, or what is, and a topic.", "🔎 search")
         if why == "personal":
             _log("blocked", attempted="(a personal question)")
             return ("That sounds personal, so I won't send it online. Your private things stay on this device.",

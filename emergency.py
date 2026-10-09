@@ -4,6 +4,7 @@ numbers clearly, shows them big on the screen, and reads out the user's own emer
 First-aid tips come from a fixed, checked file (first_aid.json), never from the LLM."""
 import json
 import re
+import time
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -33,12 +34,13 @@ GENERAL = re.compile(
 # Any other health complaint: never let the LLM give medical advice
 SYMPTOM = re.compile(
     r"\b(?:fever|headache|migraine|stomach ?ache|stomach pain|pain in|hurts?|sick|unwell|not feeling well"
-    r"|cough|cold|allergy|rash|infection|medicine|tablet|dose)\b")
+    r"|cough|(?:have|got|caught) a (?:bad )?cold|allergy|rash|infection|medicine|tablet|dose)\b")
 
 REPEAT = re.compile(r"\b(?:repeat|again|say that again|what were the numbers)\b")
 CALM = re.compile(
     r"\b(?:i'?m|i am)\s+(?:okay|ok|okie|okey|fine|safe|alright|better)\b"
     r"|\b(?:cancel|false alarm|never ?mind|all good)\b")
+OKAY = re.compile(r"\b(?:i'?m|i am)\s+(?:okay|ok|okie|okey|fine|safe|alright|better)\b")   # fix 31
 YES = re.compile(r"^(?:yes|yeah|yep|sure|please|ok|okay|tell me)\b")
 NO = re.compile(r"^(?:no|nope|not now|i'?m fine|i'?m okay|i'?ll be fine)\b")
 
@@ -54,7 +56,18 @@ _active = None        # (kind, spoken text, banner) while an emergency is open
 _offer_help = False   # after first aid: waiting for "yes / no" to "who can I call?"
 
 
+_shown_at = 0.0       # when a banner was last shown ("I'm okay" can clear it for a few minutes)
+
+
+def _forget_banner():
+    global _shown_at
+    _shown_at = 0.0
+
+
 def _reply(say, tone="calm", banner=None, private=False):
+    global _shown_at
+    if banner:
+        _shown_at = time.time()
     return {"say": " ".join(say.split()), "tone": tone, "banner": banner, "private": private}
 
 
@@ -142,6 +155,13 @@ def handle_emergency(text, memory):
     otherwise None. banner=None clears the banner on the screen."""
     global _active, _offer_help
     lower = text.lower().strip(" .!?,")
+
+    # "I'm okay" / "I am fine" while a banner is up (or was, a few minutes ago): clear it (fix 28)
+    if (CALM.search(lower) if _active else OKAY.search(lower)) and (_active or _offer_help or time.time() - _shown_at < 300) \
+            and not SEVERE.search(lower) and not CRISIS.search(lower):
+        _active, _offer_help = None, False
+        _forget_banner()
+        return _reply("I'm glad you're okay. I'm here if you need me.", "gentle", None)
 
     # 0. Answer to "Would you like me to tell you who you can call?"
     if _offer_help:

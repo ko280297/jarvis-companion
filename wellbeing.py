@@ -210,6 +210,11 @@ def handle_wellbeing(text, memory, paused=True):
     lower = text.lower().strip(" .!?,")
 
     # Thought dump: listen quietly; a short nod only after a real pause; nothing saved unless asked
+    if _mode == "dump" and len(lower.split()) <= 6 and (
+            any(re.search(p, lower) for p, k in DIRECT if k != "dump")
+            or any(re.search(rf"\b{t}\b", lower) for m in DATA["moods"].values() if m.get("no_feel_needed")
+                   for t in m["triggers"])):
+        _mode, _dump, _silences = None, [], 0      # a new request ("I can't sleep"), not part of the thought dump
     if _mode == "dump":
         _silences = 0
         _dump.append(text)
@@ -260,6 +265,12 @@ def handle_wellbeing(text, memory, paused=True):
     if mood:
         return _mood_plan(mood, text, lower, memory)
     return None
+
+
+def stop_all():
+    """The ✕ on the screen: end any thought dump or offer. Nothing is saved."""
+    global _mode, _dump, _silences
+    _mode, _dump, _silences = None, [], 0
 
 
 def vent_mode():

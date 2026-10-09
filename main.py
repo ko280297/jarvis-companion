@@ -125,6 +125,27 @@ FEATURE_SECTIONS = [
     ("emergency", r"emergenc\w*|first aid|safety"),
     ("privacy", r"privacy|private|internet|online|offline"),
 ]
+FEATURE_LINES = {   # the same features as a list on the screen (first line = title)
+    "wellbeing": ["🌿 Well-being: what I can do", "Physiological sigh", "Slow counted breathing",
+                  "4-7-8 breathing for sleep", "5-4-3-2-1 grounding", "Butterfly hug",
+                  "Thought dump: you talk, I listen", "Journaling prompts", "Say \"stop\" or tap ✕ to end any exercise"],
+    "focus": ["🎯 Focus: what I can do", "Focus sessions with breaks: \"focus for 25 minutes on emails\"",
+              "\"How much time is left?\"", "Pause / resume", "\"Note ...\" parks a thought for later",
+              "Energy check at each break", "\"Stop focus\" or tap ✕"],
+    "games": ["🎮 Games", "Tic-tac-toe (say or tap a square)", "Memory sequence", "Mental math",
+              "Guess the number", "\"Stop the game\" or tap ✕"],
+    "lists": ["📝 Lists: what I can do", "Add / remove: \"add 2 eggs to my grocery list\"",
+              "Numbers add up: \"add 2 more apples\", \"change apples to 5\"", "\"I bought milk\" ticks it off",
+              "\"Remove duplicates from my grocery list\"", "Clear a list", "Share any list with a QR code"],
+    "period": ["🩸 Period tracker", "Start and end dates", "Symptoms", "Cycle day and next estimate",
+               "Patterns", "Discreet reminder", "Summary for your doctor"],
+    "meeting": ["📋 Meeting mode", "Listens quietly for plans and tasks", "Asks before saving anything",
+                "The conversation itself is never kept"],
+    "emergency": ["🚨 Emergency help", "112 and the right numbers", "Your emergency contacts",
+                  "First aid: burns, cuts, sprains, dizziness and more", "Works offline"],
+    "privacy": ["🔒 Privacy", "Everything runs on this device", "Online only for weather, news or a look-up",
+                "Every online call is shown on the screen", "Offline mode and quiet mode"],
+}
 FEATURE_HELP = {
     "wellbeing": "In well-being, I can do a physiological sigh, slow counted breathing, 4 7 8 breathing for sleep, "
                  "a 5 4 3 2 1 grounding exercise, the butterfly hug, a thought dump where you talk and I just listen, "
@@ -274,6 +295,44 @@ def handle_actions(memory):
             _mic_muted = not _mic_muted
             memory.set_setting("mic_muted", "on" if _mic_muted else "off")
             print("👆 Screen: microphone " + ("muted (it isn't even opened)" if _mic_muted else "on"))
+        elif action == "close_screen":                   # the ✕ on the device screen: close the app
+            print("👆 Screen: ✕ tapped, closing the screen and stopping Jarvis")
+            stop = os.path.expanduser("~/jarvis_stop.sh")
+            if os.path.exists(stop):
+                subprocess.Popen(["bash", stop], start_new_session=True)
+            else:
+                subprocess.Popen(["pkill", "chromium"], start_new_session=True)
+        elif action == "stop_activity":                 # ✕ on any card: game, exercise, focus, QR
+            dashboard.update(activity=None)
+            stop_sharing()
+            if getattr(dashboard, "STOP", None) is not None:
+                dashboard.STOP.clear()
+            if is_active():
+                end_activity()
+                say("Okay, we stopped the game.", "🎮 game (on device)")
+            if focus_screen():
+                fplan = handle_focus("stop focus", memory)
+                if fplan:
+                    run_plan(fplan)
+            _EXERCISE["plan"] = None
+            try:
+                import wellbeing as _wb
+                _wb.stop_all()
+            except Exception:
+                pass
+            try:
+                import meeting as _mt
+                _mt.stop_all()
+            except Exception:
+                pass
+            print("👆 Screen: ✕ tapped, activity stopped")
+        elif action.startswith("ttt_"):                  # a tap on a tic-tac-toe square
+            import activities as _acts
+            if isinstance(_acts._current, _acts.TicTacToe):
+                act_ = handle_activity(str(int(action[4:]) + 1))
+                if act_:
+                    dashboard.update(activity=act_["screen"])
+                    say(act_["say"], "🎮 game (touch)", tone="bright")
         elif action == "close_card":
             dashboard.update(activity=None, emergency=None)
             stop_sharing()
@@ -306,8 +365,8 @@ NOISE_TAGS = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")   # [BLANK_AUDIO], (m
 # Whisper sometimes "hears" these in a short burst of noise; ignore them when the recording was tiny
 WHISPER_GHOSTS = {"for you", "you", "thanks for watching", "thank you for watching", "so"}
 
-STOP_EXERCISE = re.compile(r"^(?:stop|enough|that's enough|i'm done|i am done|quit|cancel|no more|skip it)\b"
-                           r"|\bstop (?:it|this|the exercise|grounding)\b|\blet'?s stop\b")
+STOP_EXERCISE = re.compile(r"(?<!don't )(?<!bus )\b(?:stop|stopped|enough|quit|cancel|i'?m done|i am done|no more|skip it"
+                           r"|end (?:it|this|the exercise))\b|\blet'?s stop\b")
 
 # Wanting to hurt someone else (harm to oneself is handled earlier, by the crisis path)
 HARM_INTENT = re.compile(
@@ -458,6 +517,11 @@ def _run_plan_steps(plan, hear=None):
     hear(seconds) -> what the user said ('' if nothing, None if an emergency took over)."""
     global _last_ack
     for step in plan:
+        if getattr(dashboard, "STOP", None) is not None and dashboard.STOP.is_set():   # ✕ tapped on the screen: stop the exercise
+            dashboard.STOP.clear()
+            dashboard.update(activity=None)
+            say("Okay, we'll stop here. I'm here whenever you need me.", "🌿 wellbeing (on device)", tone="gentle")
+            return
         kind = step[0]
         if kind == "say":
             say(step[1], "🌿 wellbeing (on device)", tone=step[2])
@@ -485,6 +549,9 @@ def _run_plan_steps(plan, hear=None):
             items, tries = [], 0
             while tries < 3:
                 heard = hear(secs) if hear else ""
+                if getattr(dashboard, "STOP", None) is not None and dashboard.STOP.is_set():
+                    items = []                             # a ✕ tap while listening: the next step stops
+                    break
                 if heard is None:                          # an emergency came up: stop the exercise
                     return
                 if not heard:
@@ -695,7 +762,7 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
             frame, _ = stream.read(CHUNK)
             frame = frame.flatten()
             frames.append(frame)
-            if not heard_speech and not dashboard.ACTIONS.empty():
+            if not dashboard.ACTIONS.empty():          # a button was tapped: handle it right away (fix 28)
                 return REMINDER_DUE                        # a button was tapped: handle it right away
             if rms(frame) > (level or _threshold):
                 heard_speech, quiet = True, 0.0
@@ -758,9 +825,15 @@ def transcribe(stt, audio, memory):
     words.update(set(memory.list_names()) | set(STARTER_LISTS))   # the user's own list names
     words.update({ASSISTANT_NAME, "Tic-tac-toe", "Memory sequence", "Mental math",
                   "Quiet mode on", "Quiet mode off", "Meeting mode on", "Meeting mode off",
-                  "QR code", "Close the QR code", "grocery list"})   # app words
+                  "QR code", "Close the QR code", "grocery list",
+                  "Log cramps", "Log headache", "bloating"})   # app words
+    if is_active():      # in a game: only game words, so "six" isn't heard as "fix", and Whisper is faster
+        words = {"1, 2, 3, 4, 5, 6, 7, 8, 9, 10", "six", "top left", "top right", "center", "bottom left",
+                 "bottom right", "red, blue, green, yellow", "higher", "lower", "give up", "stop the game"}
     hint = ", ".join(sorted(words))
-    segments = stt.transcribe(audio, initial_prompt=hint)
+    # Whisper's window fits the recording (+ margin) instead of always 30 s: much faster on the Pi
+    ctx = min(1500, max(300, int(len(audio) / SAMPLE_RATE * 50) + 100))
+    segments = stt.transcribe(audio, initial_prompt=hint, audio_ctx=ctx)
     return " ".join(s.text.strip() for s in segments).strip()
 
 
@@ -1091,6 +1164,9 @@ def handle_command(text, memory, history, reminders):
     if not qr_on_screen and asks_close and re.search(r"\b(?:q\s?r|code|viewer)\b", lower):
         say("There's no code on my screen right now.", "📤 share (on device)")
         return True
+    if re.search(r"\b(?:turn|switch|shut)\s+off\s+(?:the\s+|your\s+|my\s+)?(?:mic|mike|microphone)\b"
+                 r"|^(?:the\s+)?(?:mic|mike|microphone)\s+off$", lower):
+        lower = "mute the mic"                            # handled by "mute the mic" just below
     # "Is the mic on?" / "is Mike on or off?": the real state, never a guess
     if re.search(r"\b(?:mic|mike|microphone)\b", lower) and re.search(r"\b(?:on|off|working|status|listening)\b", lower) \
             and not re.search(r"\bmute\b", lower):
@@ -1166,9 +1242,9 @@ def handle_command(text, memory, history, reminders):
         """'2 eggs' -> (2, 'eggs'); 'a dozen bananas' -> (12, 'bananas'); 'milk' -> (None, 'milk')."""
         item = item.strip()
         m_ = re.match(r"^(\d+|half a dozen|a couple of|a dozen|dozen|one|two|three|four|five|six|seven|eight"
-                      r"|nine|ten|eleven|twelve)\s+(?:more\s+)?(.+)$", item)
+                      r"|nine|ten|eleven|twelve)\s+(?:more\s+)?(.+)$", item, re.I)   # "Two Apples" too
         if m_:
-            return (int(m_.group(1)) if m_.group(1).isdigit() else NUMS[m_.group(1)]), m_.group(2)
+            return (int(m_.group(1)) if m_.group(1).isdigit() else NUMS[m_.group(1).lower()]), m_.group(2)
         return None, re.sub(r"^(?:a|an)\s+", "", item)
 
     def same_key(word):
@@ -1180,15 +1256,23 @@ def handle_command(text, memory, history, reminders):
         return w
 
     def find_item(lst, thing):
-        """The list entry for this thing, if any: ('6 eggs', 6, 'eggs')."""
-        for entry in memory.list_get(lst):
-            q, n = split_qty(entry)
-            if same_key(n) == same_key(thing):
-                return entry, q, n
-        return None
+        """The list entry for this thing, if any: ('6 eggs', 6, 'eggs').
+        Repeats of the same thing ('apples', 'Two Apples', '2 apples') are merged into one entry first."""
+        hits = [(e,) + split_qty(e) for e in memory.list_get(lst) if same_key(split_qty(e)[1]) == same_key(thing)]
+        if not hits:
+            return None
+        if len(hits) > 1:
+            qs = [q for _, q, _ in hits if q]
+            name_ = hits[0][2].lower()
+            merged = f"{sum(qs)} {name_}" if qs else name_
+            for e, _, _ in hits:
+                memory.list_remove_exact(lst, e)
+            memory.list_add(lst, merged)
+            return merged, (sum(qs) if qs else None), name_
+        return hits[0]
 
     def replace_item(lst, old, new):
-        memory.list_remove(lst, old)
+        memory.list_remove_exact(lst, old)          # exactly this entry, not another one with the same words
         if new:
             memory.list_add(lst, new)
 
@@ -1209,8 +1293,9 @@ def handle_command(text, memory, history, reminders):
                 replace_item(lst, old, f"{old_qty - qty} {old_name}")
                 left.append(f"{old_qty - qty} {old_name}")
             else:                                             # all of it (and any repeats)
-                while memory.list_remove(lst, old):
-                    pass
+                for entry in memory.list_get(lst):
+                    if same_key(split_qty(entry)[1]) == same_key(old_name):
+                        memory.list_remove_exact(lst, entry)
                 gone.append(old_name)
         return gone, left, missing
 
@@ -1238,6 +1323,80 @@ def handle_command(text, memory, history, reminders):
         elif re.match(r"(?:no|nope|cancel|leave it)\b", lower):
             say("Okay, I didn't add anything.", "📝 lists (on device)")
             return True
+
+    # ----- Fix 26: tidy repeats, set a number, increase / decrease, short add / remove -----
+    _N = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a dozen|dozen|half a dozen)"
+    _named = next((list_name(w) for w in re.findall(r"[a-z]+", lower)
+                   if list_name(w) in known_lists and not list_name(w).startswith("sched")), None)
+    _target = _named or (_last_list if _last_list and not _last_list.startswith("sched") else None) or "grocery"
+    lower = re.sub(r"(?:,?\s+(?:too|also|as well|please))+$", "", lower)     # "... to my grocery list too"
+    lower = re.sub(r"^((?:please\s+)?(?:can you\s+)?)(?:subtract|minus|take away|take out)\s+", r"\1remove ", lower)
+    # "remove duplicates from my grocery list" / "clean up my grocery list": one entry per thing
+    if (re.search(r"\b(?:duplicates?|repeats?|repeated|double)\b", lower)
+            and re.search(r"\b(?:remove|delete|clean|clear|merge|fix|get rid)\b", lower)) \
+            or re.match(r"^(?:please\s+)?(?:can you\s+)?(?:clean up|tidy(?: up)?|sort out)\s+(?:my\s+|the\s+)?[a-z ]*list$", lower):
+        name = _target
+        _last_list = name
+        before = memory.list_get(name)
+        merged, order = {}, []
+        for entry in before:
+            for part in items_of(entry):
+                q, n = split_qty(part)
+                k = same_key(n)
+                if k not in merged:
+                    merged[k] = [0, False, n.lower()]
+                    order.append(k)
+                if q:
+                    merged[k][0] += q
+                    merged[k][1] = True
+        after = [f"{merged[k][0]} {merged[k][2]}" if merged[k][1] else merged[k][2] for k in order]
+        if len(after) == len(before) and [a.lower() for a in after] == [b.lower() for b in before]:
+            say(f"There are no repeats on your {name} list.", "📝 lists (on device)")
+            return True
+        memory.list_clear(name)
+        for a in after:
+            memory.list_add(name, a)
+        say(f"Done, I merged the repeats. Your {name} list has: {join(after)}." if after
+            else f"Your {name} list is empty.", "📝 lists (on device)")
+        return True
+    # "change apples to 5" / "set eggs to 12" / "increase apples to 5": the number is set, not added
+    m = re.match(rf"^(?:please\s+)?(?:can you\s+)?(?:change|set|make|update|increase|decrease|reduce)\s+(?:the\s+)?"
+                 rf"(?:number of\s+|quantity of\s+|count of\s+)?(.+?)\s+to\s+{_N}(?:\s+.*)?$", lower)
+    if m:
+        qty_, thing_ = split_qty(f"{m.group(2)} {m.group(1)}")
+        thing_ = re.sub(r"\s+(?:on|in)\s+(?:my\s+|the\s+)?[a-z ]*list$", "", thing_)
+        hit = find_item(_target, thing_)
+        if hit or "list" in lower:                 # never "set volume to 50" or anything else
+            name_ = hit[2] if hit else thing_
+            if hit:
+                replace_item(_target, hit[0], f"{qty_} {name_}")
+            else:
+                memory.list_add(_target, f"{qty_} {name_}")
+            _last_list = _target
+            say(f"Okay, {qty_} {name_} on your {_target} list now.", "📝 lists (on device)")
+            return True
+    # "increase apples by 2" / "decrease eggs by 1": the same as adding / removing that many
+    m = re.match(rf"^(?:please\s+)?(?:can you\s+)?(increase|raise|add to|decrease|reduce|lower)\s+(?:the\s+)?"
+                 rf"(?:number of\s+|quantity of\s+|count of\s+)?(.+?)\s+by\s+{_N}\b", lower)
+    if m and (find_item(_target, m.group(2)) or "list" in lower):
+        thing_ = re.sub(r"\s+(?:on|in)\s+(?:my\s+|the\s+)?[a-z ]*list$", "", m.group(2))
+        if m.group(1) in ("increase", "raise", "add to"):
+            lower = f"add {m.group(3)} {thing_} to my {_target} list"
+        else:
+            lower = f"remove {m.group(3)} {thing_} from my {_target} list"
+    # "add 2 more apples" / "remove milk" with no list named: the list we just talked about
+    _skip = (r"\b(?:that|it|this|everything|all|memor\w*|remind\w*|alarm|timer|contact|number|note|city|name|voice"
+             r"|meeting|appointment|call|today|tonight|tomorrow|at|am|pm|monday|tuesday|wednesday|thursday|friday"
+             r"|saturday|sunday)\b")
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+)$", lower)
+    if m and _last_list and not re.search(r"\s(?:to|on|in|into)\s", lower) and len(m.group(1).split()) <= 5 \
+            and not re.search(_skip, m.group(1)):
+        lower = f"add {m.group(1)} to my {_target} list"
+    m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:remove|delete|take off|cross off)\s+(.+)$", lower)
+    if m and _last_list and " from " not in lower and len(m.group(1).split()) <= 5 \
+            and not re.search(_skip, m.group(1)) \
+            and any(find_item(_target, split_qty(p)[1]) for p in items_of(m.group(1))):
+        lower = f"remove {m.group(1)} from my {_target} list"
 
     # Add: new things are added, numbers add up ("2 eggs" + "4 eggs" = "6 eggs"), no duplicates
     m = re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put)\s+(.+?)\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?([a-z ]+?)(?:\s*list)?$", lower)
@@ -1362,8 +1521,7 @@ def handle_command(text, memory, history, reminders):
     if m and is_list_target(m.group(1)):
         name = list_name(m.group(1))
         items = memory.list_get(name)
-        for item in items:
-            memory.list_remove(name, item)
+        memory.list_clear(name)                     # everything at once (one by one could leave one behind)
         _last_list = name
         say(f"Done, your {name} list is empty now." if items else f"Your {name} list is already empty.",
             "📝 lists (on device)")
@@ -1459,7 +1617,8 @@ def handle_command(text, memory, history, reminders):
         say(INTRO, f"🙂 about {ASSISTANT_NAME}")
         return True
 
-    if re.match(r"(what can you do|what are your features|how can you help)", lower):
+    if re.match(r"(what can you do|what are your features|how can you help)", lower) \
+            and not any(re.search(p_, lower) for _, p_ in FEATURE_SECTIONS):
         say(CAPABILITIES, f"🙂 about {ASSISTANT_NAME}")
         return True
 
@@ -1737,7 +1896,7 @@ def main():
         audio = listen(wake, reminders, follow_up or venting,
                        max_seconds=60 if venting else MAX_RECORD_SECONDS,
                        silence=4.0 if venting else SILENCE_TO_STOP,
-                       timeout=45 if venting else FOLLOW_UP_SECONDS)
+                       timeout=45 if venting else (20 if is_active() else FOLLOW_UP_SECONDS))   # games: time to think
         if isinstance(audio, str):       # a reminder, or focus/break time, is due: handled at the top
             continue
         if audio is None:
@@ -1758,6 +1917,20 @@ def main():
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
             print(f"   (ignored repeated phrase, probably background noise: {text})")
+            text = ""
+        _kept = []                    # Whisper sometimes writes the same sentence twice: keep it once
+        for _p in re.split(r"(?<=[.!?])\s+", text):
+            if _p.strip() and (not _kept or _p.strip(" .!?,").lower() != _kept[-1].strip(" .!?,").lower()):
+                _kept.append(_p.strip())
+        text = " ".join(_kept)
+        # my own voice coming back through the microphone (the end of my last reply) is not the user
+        _heard_w = " ".join(re.findall(r"[a-z']+", text.lower()))
+        _said_w = " ".join(re.findall(r"[a-z']+", (_last_said or "").lower()))
+        _at = f" {_said_w} ".find(f" {_heard_w} ")
+        if len(_heard_w.split()) >= 4 and _at >= 0 \
+                and not re.search(r"\b(?:say|saying|like|example|try|ask)\s*$", f" {_said_w} "[:_at]) \
+                and time.time() - (dashboard.STATE.get("reply_at") or 0) < 20:
+            print(f"   (ignored my own voice heard back: {text})")
             text = ""
         if len(audio) < 2.0 * SAMPLE_RATE and text.lower().strip(" .!?,") in WHISPER_GHOSTS:
             print(f"   (ignored a short noise heard as: {text})")
@@ -1810,6 +1983,9 @@ def main():
                       "I bought", text, flags=re.I)
         text = re.sub(r"\b(?:my toes|to matters|two matters|tomatos)\b", "tomatoes", text, flags=re.I)
         text = re.sub(r"\bperiods\b", "period", text, flags=re.I)
+        text = re.sub(r"^(?:i (?:want|would like|need) to|let'?s|let me)\s+(?=(?:add|put|remove)\b)", "", text, flags=re.I)
+        text = re.sub(r"^(add|put)\s+(?:to|in|into|on)\s+(?:my\s+|the\s+)?([a-z]+)(?:\s+list)?[,:]?\s+(.+?)[.!]*$",
+                      lambda m: f"{m.group(1)} {m.group(3)} to my {m.group(2)} list", text, flags=re.I)
         text = re.sub(r"^(?:tell me |show me )?what(?:'s| is)(?: there)? (?:in|on) my (?:tasks?|to-?dos?)(?: list)?[?.!]*$",
                       "show my task list", text, flags=re.I)
         # Period tracker, said or heard differently (midnight test)
@@ -1817,6 +1993,9 @@ def main():
                       "log", text, flags=re.I)
         text = re.sub(r"^log,\s*", "log ", text, flags=re.I)
         text = re.sub(r"\blog grams\b", "log cramps", text, flags=re.I)
+        text = re.sub(r"^(?:blog|clog|lob|lag|logs|logged|locked|lock in|log in)\b,?(?=\s+(?:cramps?|crams?|grams|crabs|crumbs"
+                      r"|craps|clamps|headaches?|bloating|mood))", "log", text, flags=re.I)
+        text = re.sub(r"\blog (?:crams?|crabs|crumbs|craps|cramped|clamps|gramps|crimps)\b", "log cramps", text, flags=re.I)
         text = re.sub(r"\bcramps and loading\b", "cramps and bloating", text, flags=re.I)
         text = re.sub(r"\bperiod crimes\b", "period cramps", text, flags=re.I)
         text = re.sub(r"\bpsycho summary\b", "cycle summary", text, flags=re.I)
@@ -1861,7 +2040,8 @@ def main():
             continue
 
         # Emergency help comes before everything else: no LLM, works offline
-        help_ = None if is_symptom_log(text) else handle_emergency(text, memory)   # "log cramps" is a note, not first aid
+        list_talk = re.search(r"\b\w+ list\b", text, re.I) and not SEVERE.search(text.lower())
+        help_ = None if is_symptom_log(text) or list_talk else handle_emergency(text, memory)   # "log cramps" is a note, not first aid
         if help_ and (help_.get("banner") or {}).get("kind") == "first_aid":
             severe = SEVERE.search(text.lower())
             if severe:                                     # a serious sign in the same sentence: emergency help instead
@@ -1942,9 +2122,16 @@ def main():
             print(f"   (ignored background sound heard as: {text})")
             follow_up = False
             continue
+        _sec = next((k for k, pat in FEATURE_SECTIONS if re.search(pat, lower_f)), None)
         if re.search(r"\b(?:features?|capabilit\w*|what (?:all |else )?can you do|things you can do"
-                     r"|what (?:all )?(?:can|do) you (?:help|offer))\b", lower_f):
-            section = next((k for k, pat in FEATURE_SECTIONS if re.search(pat, lower_f)), None)
+                     r"|what (?:all )?(?:can|do) you (?:help|offer))\b", lower_f) or (_sec and not is_active() and re.search(
+                     r"\bwhat (?:all |else )?can (?:i|we) do\b|\bhow (?:do i|to|can i) use\b|\boptions?\b"
+                     r"|\bwhat(?:'s| is) (?:in|there in)\b|\bwhich (?:exercises|activities)\b"
+                     r"|\bwhat (?:all )?(?:exercises|activities)\b|\bwhat does .* mode do\b", lower_f)):
+            section = _sec
+            if section and FEATURE_LINES.get(section):
+                dashboard.update(activity={"title": FEATURE_LINES[section][0], "lines": FEATURE_LINES[section][1:],
+                                           "expires": time.time() + 90})
             say(FEATURE_HELP[section] if section else CAPABILITIES, f"🙂 about {ASSISTANT_NAME}")
             follow_up, follow_count, chime_next = True, 0, False
             continue
@@ -1960,7 +2147,8 @@ def main():
             say(joke, "😄 joke (on device)", tone="bright")
             follow_up, follow_count, chime_next = True, 0, False
             continue
-        if re.search(r"\b(?:speaker|volume)\b", lower_f):
+        if re.search(r"\b(?:speaker|volume)\b", lower_f) and not re.search(   # volume changes: fix 22 handles them
+                r"\bvolume\b|\b(?:up|down|louder|quieter|softer|increase|decrease|raise|lower|reduce)\b", lower_f):
             say("I can't see the speaker switch or the volume myself. " + (
                 "Right now I'm in quiet mode, so I answer on the screen." if _quiet else
                 "Right now I'm talking out loud. Say quiet mode on if you'd like answers on the screen only."),
@@ -2020,6 +2208,37 @@ def main():
 
         # Focus & Energy: sessions, breaks, pause/resume (no LLM)
         text = re.sub(r"\bfocus (?:on|for) (\d+) (minutes?|mins?) on\b", r"focus for \1 \2 on", text, flags=re.I)
+        # Speaker volume by voice (Pi / PipeWire): "volume up", "louder", "set the volume to 40"
+        low_v = text.lower()
+        if re.search(r"\b(?:volume|louder|quieter|softer|speak up)\b", low_v) and not re.search(r"\bquiet mode\b", low_v):
+            m_v = re.search(r"\b(\d{1,3})\s*(?:%|percent)?", low_v)
+            if m_v and re.search(r"\b(?:set|to|at|make it|volume)\b", low_v):
+                arg = f"{min(int(m_v.group(1)), 100)}%"
+            elif re.search(r"\b(?:up|louder|increase|raise|higher|speak up|more)\b", low_v):
+                arg = "10%+"
+            elif re.search(r"\b(?:down|quieter|softer|decrease|lower|less|reduce)\b", low_v):
+                arg = "10%-"
+            elif re.search(r"\b(?:what|how)\b", low_v):
+                arg = ""
+            else:
+                arg = None
+            if arg is not None:
+                env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000")}
+                try:
+                    if arg:
+                        subprocess.run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", arg],
+                                       check=True, timeout=5, env=env)
+                    out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], capture_output=True,
+                                         text=True, timeout=5, env=env).stdout
+                    lvl = re.search(r"([\d.]+)", out)
+                    level = round(float(lvl.group(1)) * 100) if lvl else None
+                    say(f"{'Okay, my' if arg else 'My'} volume is {'now ' if arg else ''}{level} percent."
+                        if level is not None else "Okay, done.", "🔊 volume (on device)")
+                except (OSError, subprocess.SubprocessError):
+                    say("I can only change the volume of my own device speaker.", "🔊 volume")
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+
         # Quick answers from code (no LLM): thanks, date + time, games said casually
         low = text.lower().strip(" .!?,")
         if re.fullmatch(r"(?:ok(?:ay)?,?\s*)?(?:thank you|thanks|thank u|thx)(?: so much| a lot| very much)?"
@@ -2119,6 +2338,22 @@ def main():
                 "⚙️ name (on device)")
             continue
 
+        # "Call me Krati" / "change my name to Krati": a clear request, so no yes/no question (fix 27)
+        m_name = re.search(r"\b(?:call me|change my name to|rename me(?: to)?|my name is now|my new name is)\s+([A-Za-z]+)\b",
+                           text, re.I)
+        if m_name and m_name.group(1).lower() not in (
+                "jarvis", "a", "an", "the", "back", "later", "when", "if", "please", "maybe", "at", "in", "on",
+                "tomorrow", "today", "tonight", "now", "soon", "again", "once", "after", "before", "by", "sir", "madam"):
+            _after = text[m_name.start(1):].lower()
+            _sp = spelled_word(_after) if SPELLED.match(_after) else None      # "call me K R A T I"
+            new_ = (_sp or m_name.group(1)).title()
+            memory.set_setting("user_name", new_)
+            _pending_name, _guest = None, None
+            print(f"🙂 User name set: {new_}")
+            say(f"Done, I'll call you {new_} from now on."
+                + ("" if _sp else " If I heard it wrong, say call me, and spell it, letter by letter."),
+                "⚙️ name saved on device", tone="bright")
+            continue
         # "I am Krati, who are you?" -> handle the name, then answer the rest
         text, new_name = take_introduction(text)
         if new_name:
@@ -2164,7 +2399,11 @@ def main():
                      r"|\b(?:can|do) you (?:access|use|reach|get on|go on|have)\s+(?:the\s+)?(?:internet|wi-?fi|web)\b"
                      r"|\bdo you have (?:internet|wi-?fi|a connection)\b|\bis (?:there|the) (?:internet|connection)\b",
                      text.lower()):
-            ok = network_up() and check_internet()
+            if _offline_mode:
+                say("Offline mode is on, so I'm not going online at all. Say offline mode off, and I can check the "
+                    "weather, news and look-ups again.", "✈️ offline mode")
+                continue
+            ok = network_up() and (check_internet() or check_internet())     # a slow first try is not "offline"
             say("Yes, I'm connected right now. I only go online when you ask for the weather, the news or a look-up, "
                 "and only a city name or a short topic ever leaves this device." if ok else
                 "No, I'm offline right now. Everything else still works here: memory, lists, reminders, games "
@@ -2500,6 +2739,13 @@ def main():
             reply = ("I didn't save that. Say it like this: add a meeting tomorrow at 2:30 to my schedule, "
                      "or: add milk to my grocery list.")
             route_name = "🛡️ false promise blocked"
+
+        # A list sentence that reached the LLM: never "add it yourself"; say how to say it
+        if route_name.startswith(("🧠", "📚")) and re.search(r"\b(?:add|put|remove|delete)\b.*\blist\b|\blist\b.*\b(?:add|put)\b",
+                                                             text.lower()):
+            print(f"   (list sentence not understood, LLM reply replaced: {reply})")
+            reply = "I didn't quite catch that. Say it like this: add milk to my grocery list."
+            route_name = "📝 lists (how to say it)"
 
         # Block false claims: the LLM can't set alarms, change lists, send messages, or make calls
         promise = re.search(

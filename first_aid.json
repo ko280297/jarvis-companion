@@ -42,7 +42,11 @@
   },
   "nosebleed": {
     "title": "Nosebleed",
-    "triggers": ["nose ?bleed", "nose is bleeding", "bleeding from my nose"],
+    "triggers": [
+      "nose ?bleed",
+      "nose is bleeding",
+      "bleeding from my nose"
+    ],
     "advice": "Sit up, lean slightly forward, and pinch the soft part of your nose for 10 to 15 minutes. Don't tilt your head back. If it doesn't stop after 20 minutes, please get medical help."
   },
   "dizzy": {
@@ -53,7 +57,12 @@
       "head is spinning",
       "room is spinning",
       "feel faint",
-      "light ?headed"
+      "light ?headed",
+      "head spinning",
+      "spinning head",
+      "head (?:feels |is )?spinning",
+      "everything is spinning",
+      "vertigo"
     ],
     "advice": "Please sit or lie down right away so you don't fall, and breathe slowly. Take a few small sips of water, and get up slowly once it passes. If it comes with chest pain, a very bad headache, fainting, or trouble speaking, call 112 right away."
   },
@@ -78,5 +87,46 @@
       "cramps"
     ],
     "advice": "A warm water bottle or heating pad on your lower belly can help, along with rest, gentle stretching and sips of water. If the pain is severe, unusual for you, or stops you from doing everyday things, please see a doctor."
+  },
+  "headache": {
+    "title": "Headache",
+    "triggers": [
+      "headache",
+      "head (?:is )?(?:hurting|aching|pounding)",
+      "my head hurts",
+      "migraine"
+    ],
+    "advice": "Rest in a quiet, dim room, drink a glass of water, and take a break from screens. A cool cloth on your forehead can help. If it is sudden and very severe, comes after a head injury, or comes with fever, a stiff neck, confusion, weakness or trouble speaking, call 112 right away."
+  },
+  "fever": {
+    "title": "Fever",
+    "triggers": [
+      "fever",
+      "high temperature",
+      "feverish"
+    ],
+    "advice": "Rest, drink plenty of water, and wear light clothes. A lukewarm cloth on your forehead can help. If it is very high, lasts more than 3 days, or comes with a stiff neck, a rash, confusion or trouble breathing, please see a doctor."
+  },
+  "stomach": {
+    "title": "Stomach ache",
+    "triggers": [
+      "stomach ?ache",
+      "stomach pain",
+      "tummy ?ache",
+      "stomach hurts",
+      "upset stomach"
+    ],
+    "advice": "Rest, sip water, and eat only light, plain food for a while. A warm water bottle on your belly can help. If the pain is very bad, stays on the lower right side, or comes with fever or vomiting, please see a doctor."
+  },
+  "cold": {
+    "title": "Cold or cough",
+    "triggers": [
+      "cough(?:ing)?",
+      "(?:have|got|caught) a (?:bad )?cold",
+      "sore throat",
+      "runny nose",
+      "blocked nose"
+    ],
+    "advice": "Rest, drink warm fluids, and gargle with warm salt water for a sore throat. Steam can help a blocked nose. If you have trouble breathing, a high fever, or it lasts more than a week, please see a doctor."
   }
 }

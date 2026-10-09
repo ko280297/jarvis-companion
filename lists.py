@@ -132,15 +132,75 @@ def _spoken_item(item):
     return f"{base}, on {weekday}, {rest}"
 
 
+_NUMW = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+         "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "a couple of": 2, "a dozen": 12, "dozen": 12,
+         "half a dozen": 6}
+_QTY = re.compile(r"^(\d+|half a dozen|a couple of|a dozen|dozen|one|two|three|four|five|six|seven|eight"
+                  r"|nine|ten|eleven|twelve)\s+(?:more\s+)?(.+)$", re.I)
+
+
+def _split_qty(item):
+    """'Two Apples' -> (2, 'Apples'); 'milk' -> (None, 'milk')."""
+    item = item.strip()
+    m = _QTY.match(item)
+    if m:
+        g = m.group(1).lower()
+        return (int(g) if g.isdigit() else _NUMW[g]), m.group(2)
+    return None, re.sub(r"^(?:a|an|the|some)\s+", "", item, flags=re.I)
+
+
+def _key(thing):
+    """'Apples' / 'apple', 'potatoes' / 'potato' -> the same key."""
+    w = " ".join(thing.lower().split())
+    for suffix, repl in (("oes", "o"), ("ies", "y"), ("s", "")):
+        if w.endswith(suffix) and len(w) > len(suffix) + 1:
+            return w[:-len(suffix)] + repl
+    return w
+
+
+def _drop(memory, name, entry):
+    if hasattr(memory, "list_remove_exact"):
+        return memory.list_remove_exact(name, entry)
+    return memory.list_remove(name, entry)
+
+
 def _add(memory, name, item):
+    """Add without repeats: 'Milk' is the same as 'milk', and '2 apples' + 'Two Apples' = '4 apples'."""
     global _last_list
     if is_unsafe(item):
         return REFUSAL
+    _last_list = name
     if name == "schedule":
         item = resolve_dates(item)      # Python works out the real date
-    memory.list_add(name, item)
-    _last_list = name
-    return f"Added to your {name} list."
+        memory.list_add(name, item)
+        return f"Added to your {name} list."
+    parts = [p.strip(" .") for p in re.split(r",|\band\b|&", item) if p.strip(" .")] or [item]
+    if any(len(p.split()) > 4 for p in parts):
+        parts = [item]                  # a longer thought ("call mom and ask about dinner") stays one item
+    added, more, already = [], [], []
+    for part in parts:
+        qty, thing = _split_qty(part)
+        hits = [e for e in memory.list_get(name) if _key(_split_qty(e)[1]) == _key(thing)]
+        if hits and qty:
+            total = sum(_split_qty(e)[0] or 0 for e in hits) + qty
+            for e in hits:
+                _drop(memory, name, e)
+            memory.list_add(name, f"{total} {thing.lower()}")
+            more.append(f"{total} {thing.lower()}")
+        elif hits:
+            already.append(thing)
+        else:
+            memory.list_add(name, f"{qty} {thing}" if qty else thing)
+            added.append(thing)
+    said = []
+    if added:
+        said.append(f"Added to your {name} list.")
+    if more:
+        said.append(f"You now have {', '.join(more)} on your {name} list.")
+    if already:
+        what = ", ".join(already)
+        said.append(f"{what[:1].upper() + what[1:]} {'is' if len(already) == 1 else 'are'} already on your {name} list.")
+    return " ".join(said)
 
 
 def _read(memory, name):
@@ -203,6 +263,8 @@ def _one_command(sentence, memory):
         return _remove(memory, match_list(m.group(2), memory), m.group(1))
 
     m = CLEAR.match(lower)
+    if m and re.fullmatch(r"(?:that|this|it|that one|same)", m.group(1).strip()) and "list" not in lower:
+        m = None         # "delete that" is about the last thing said, not a whole list
     if m:
         name = match_list(m.group(1), memory)
         return _clear(memory, name) if name in memory.list_names() else None

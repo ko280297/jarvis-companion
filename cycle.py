@@ -17,7 +17,7 @@ DEFAULT_PHRASE = "A gentle heads-up: your self-care days may be coming up soon."
 
 # Symptoms we know (anything else is not logged, so "log cramps and chest pain" goes to emergency help instead)
 SYMPTOMS = {
-    "cramps": r"cramps?|period pain|stomach ?ache|tummy ?ache",
+    "cramps": r"cramps?|crams?|period pain|stomach ?ache|tummy ?ache",
     "headache": r"headaches?|migraines?",
     "bloating": r"bloat(?:ing|ed)?",
     "back pain": r"back ?(?:pain|ache)",
@@ -45,7 +45,7 @@ LAST = re.compile(r"\bwhen (?:did|was) my (?:last )?period\b|\bmy last period\b"
 LENGTH = re.compile(r"\bhow long is my (?:menstrual |period )?cycle\b|\bmy (?:average |menstrual )?cycle length\b")
 PERIOD_LEN = re.compile(r"\bhow long (?:does|do) my periods? (?:usually )?last\b|\bmy (?:average )?period length\b")
 CYCLE_DAY = re.compile(r"\b(?:what|which) day of my (?:cycle|period)\b|\bmy cycle day\b|\bam i on my period\b")
-SYMLOG = re.compile(r"^(?:please\s+)?(?:log|track|record)\s+(?:my\s+)?(?:symptoms?:?\s*)?(.+?)(" + WHEN + r")$")
+SYMLOG = re.compile(r"^(?:please\s+)?(?:log|track|record|note|note down|jot down)\s+(?:my\s+)?(?:symptoms?:?\s*)?(.+?)(" + WHEN + r")$")
 PATTERN = re.compile(r"\bdo i (?:usually |always |often )?(?:get|have) (.+?) (?:before|during|around|after) my periods?\b"
                      r"|\bpatterns? in my symptoms\b|\bwhat symptoms do i (?:usually |normally |often )?(?:get|have)\b")
 SUMMARY = re.compile(r"\b(?:cycle|period) (?:summary|report)\b|\bsummary of my (?:cycle|periods?)\b")

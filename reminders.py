@@ -59,11 +59,27 @@ def parse_when(t, now=None):
             hour += 12
         if ampm == "a" and hour == 12:
             hour = 0
-        tomorrow = "tomorrow" in t
+        # Which day: "day after tomorrow", "tomorrow", "in 3 days", "on Friday" (fix 26)
+        days, weekday = 0, None
+        m_days = re.search(rf"\bin\s+({_NUM})\s+days?\b", t)
+        m_wd = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", t)
+        if "day after tomorrow" in t:
+            days = 2
+        elif "tomorrow" in t:
+            days = 1
+        elif m_days:
+            days = _n(m_days.group(1))
+        elif m_wd:
+            weekday = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].index(m_wd.group(1))
+            days = (weekday - now.weekday()) % 7
+        tomorrow = days > 0
         if tomorrow and not ampm and 1 <= hour <= 6:
             hour += 12                    # "tomorrow at 5" almost always means 5 pm
-        due = (now + timedelta(days=1 if tomorrow else 0)).replace(
+        due = (now + timedelta(days=days)).replace(
             hour=hour, minute=minute, second=0, microsecond=0)
+        if weekday is not None and due <= now:
+            due += timedelta(days=7)      # "on Friday at 5" said on Friday evening = next Friday
+            tomorrow = True
         if not ampm and hour <= 12 and not tomorrow:
             while due <= now:             # "at 5" with no am/pm = the next 5 o'clock still ahead
                 due += timedelta(hours=12)
@@ -236,7 +252,9 @@ def handle_reminder_command(text, rem):
         task = m.group(1)
         if phrase:
             task = task.replace(phrase, " ")
-            task = re.sub(r"\b(tomorrow|today)\b", " ", task)
+            task = re.sub(r"\b(?:(?:on\s+)?(?:the\s+)?day after tomorrow|tomorrow|today|in\s+\w+\s+days?"
+                          r"|(?:on\s+)?(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+                          " ", task)
         task = re.split(r"[.!?]", task)[0]                       # keep only the first sentence
         task = " ".join(task.split())
         for _ in range(3):                                       # "for me to ..." -> "..."

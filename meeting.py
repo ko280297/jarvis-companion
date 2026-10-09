@@ -16,7 +16,8 @@ STOP = re.compile(r"\bmeeting mode (?:off|of|stop|end)\b|\b(?:stop|end|turn off|
                   r"|\bthe meeting is (?:over|done|finished)\b")
 YES = re.compile(r"\b(?:yes|yeah|yep|sure|ok|okay|please|add it|save it|go ahead)\b")
 NO = re.compile(r"\b(?:no|nope|skip|don'?t|not needed|leave it)\b")
-END_REVIEW = re.compile(r"\b(?:stop|that'?s all|cancel|forget (?:it|them|all|the rest))\b")
+END_REVIEW = re.compile(r"\b(?:stop|that'?s all|cancel|forget (?:it|them|all|the rest)|meeting mode|exit|close"
+                        r"|later|skip (?:all|everything|the rest)|i'?m done|enough)\b")
 
 MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
           r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
@@ -36,7 +37,9 @@ TASK = re.compile(r"\b(?:I|We|we|You|you|He|he|She|she|They|they|(?!It\b|That\b|
 
 # Not a plan: talk about the past, or a plan that was called off
 PAST = re.compile(rf"\b(?:last (?:week|month|{WEEKDAYS})|yesterday|days? ago)\b", re.I)
-CALLED_OFF = re.compile(r"\b(?:don'?t (?:think )?(?:we )?need to|no need to|won'?t (?:need|meet)|not going to meet)\b", re.I)
+CALLED_OFF = re.compile(r"\b(?:don'?t (?:think )?(?:we )?need to|no need to|won'?t (?:need|meet)|not going to meet"
+                        r"|no (?:meeting|call|class|review|demo|session|standup)|cancel\w*|called off|is off"
+                        r"|not happening|(?:isn'?t|is not|aren'?t|are not) (?:happening|on))\b", re.I)
 
 # Turning a spoken sentence into a short entry
 LEAD = re.compile(r"^(?:(?:okay|ok|so|alright|right|and|also|um|uh|well|great)[,\s]+)*"
@@ -202,9 +205,18 @@ def meeting_chunk(text, memory):
     return None
 
 
+_unclear = 0
+
+
+def stop_all():
+    """The ✕ on the screen: meeting mode off, no questions, nothing saved."""
+    global _active, _found, _review, _unclear
+    _active, _found, _review, _unclear = False, [], [], 0
+
+
 def handle_meeting(text, memory):
     """Starting meeting mode, and the yes/no questions afterwards. Returns a plan, or None."""
-    global _active, _found, _seen, _started, _review
+    global _active, _found, _seen, _started, _review, _unclear
     lower = text.lower().strip(" .!?,")
 
     if _review:
@@ -213,12 +225,17 @@ def handle_meeting(text, memory):
             _review, _found = [], []
             return [("screen", None), _say("Okay, I won't save the rest. Nothing else was kept.")]
         if YES.search(lower) and not NO.search(lower):
+            _unclear = 0  # a clear answer
             where = _save(item, memory)
             _review.pop(0)
             return [_say(f"Added to {where}.")] + _ask_next(memory)
         if NO.search(lower):
             _review.pop(0)
             return [_say("Okay, skipped.")] + _ask_next(memory)
+        _unclear += 1
+        if _unclear >= 2:                                 # still unclear: stop asking, keep nothing more
+            _review, _found, _unclear = [], [], 0
+            return [("screen", None), _say("I'll leave the rest unsaved. Nothing else was kept.")]
         return [_say("Should I save it? Please say yes or no.")]
 
     if START.search(lower):

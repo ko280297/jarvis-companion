@@ -501,6 +501,11 @@
         border-radius: 999px;
         padding: 4px 10px;
       }
+      .statusbar span.live {
+        background: #2e7d32;
+        border-color: #2e7d32;
+        color: #ffffff;
+      }
       .statusbar span.warn {
         border-color: var(--amber);
         color: var(--amber);
@@ -533,6 +538,39 @@
       .sos { position: relative; }
       .sos-x { position: absolute; top: 8px; right: 10px; background: none; border: 0;
                color: inherit; font-size: 26px; cursor: pointer; }
+      .app-x { display: none; position: fixed; top: 10px; left: 10px; z-index: 50; min-width: 44px; height: 44px;
+               border-radius: 22px; border: 1px solid rgba(255,255,255,0.25); background: rgba(0,0,0,0.25);
+               color: rgba(255,255,255,0.75); font-size: 22px; padding: 0 14px; cursor: pointer; }
+      .kiosk .app-x { display: block; }
+      .app-x.armed { background: #b3261e; color: #fff; font-size: 18px; }
+      .kstrip { display: none; position: fixed; left: 12px; right: 12px; bottom: 10px; z-index: 40;
+                justify-content: space-between; align-items: center; gap: 12px; pointer-events: none; }
+      .kiosk .kstrip { display: flex; }
+      .kheard { font-size: 18px; color: rgba(255,255,255,0.8); background: rgba(0,0,0,0.25); border-radius: 18px;
+                padding: 8px 16px; max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                transition: opacity 0.6s; }
+      .knet { pointer-events: auto; font-size: 16px; color: rgba(255,255,255,0.85); background: rgba(0,0,0,0.3);
+              border: 1px solid rgba(255,255,255,0.2); border-radius: 18px; padding: 8px 14px; cursor: pointer; }
+      .klog { display: none; position: fixed; left: 12px; right: 12px; bottom: 60px; z-index: 45;
+              background: rgba(10,12,30,0.95); border: 1px solid rgba(255,255,255,0.2); border-radius: 16px;
+              padding: 12px 16px; font-size: 15px; color: #eee; }
+      .klog table { width: 100%; border-collapse: collapse; }
+      .klog td { padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+      /* Device screen: cards (breathing, lists, games, QR) fill the whole screen */
+      .kiosk .act { position: fixed; top: 0; left: 0; right: 0; bottom: 0; margin: 0; border-radius: 0;
+                    padding: 7vh 5vw 70px; overflow: auto; z-index: 30; text-align: center; }
+      .kiosk .act-title { font-size: 34px; }
+      .kiosk .act-line { font-size: 28px; }
+      .kiosk .breath { width: 52vh; height: 52vh; margin: 4vh auto 2vh; }
+      .kiosk .timer { font-size: 96px; }
+      .act-listen { display: inline-block; margin: 8px 0; padding: 6px 14px; border-radius: 16px;
+                    background: var(--line); font-size: 16px; }
+      .act-listen.listening { background: #2e7d32; color: #fff; }
+      .act-listen.waiting { background: #555; color: #fff; }
+      .kiosk .act-listen { font-size: 26px; padding: 8px 18px; }
+      .kiosk .act-close { width: 72px; height: 72px; font-size: 34px; top: 16px; right: 16px; z-index: 40; }
+      .kiosk .board { grid-template-columns: repeat(3, 17vh); gap: 12px; }
+      .kiosk .cell { height: 17vh; font-size: 11vh; cursor: pointer; }
       .bubble {
         display: none;
         max-width: 420px;
@@ -754,6 +792,10 @@
       </div>
     </div>
 
+    <button id="appClose" class="app-x" title="Close Jarvis">✕</button>
+    <div class="kstrip"><div id="kHeard" class="kheard" style="opacity:0"></div>
+      <div id="kNet" class="knet">🌐 Internet: 0 calls</div></div>
+    <div id="kLog" class="klog"></div>
     <div id="sos" class="sos">
       <button id="sosClose" class="sos-x" title="Close">✕</button>
       <div class="sos-title" id="sos-title"></div>
@@ -787,6 +829,7 @@
     <div id="act" class="card act">
       <button id="actClose" class="act-close" title="Close">✕</button>
       <div class="act-title" id="act-title"></div>
+      <div id="actListen" class="act-listen"></div>
       <div id="act-lines"></div>
       <div id="timer" class="timer"></div>
       <div id="orbs" class="orbs"></div>
@@ -1102,7 +1145,20 @@
           act(b.dataset.do);
         }
       });
-      $("actClose").addEventListener("click", () => act("close_card"));
+      let hideUntil = 0;
+      $("actClose").addEventListener("click", () => {
+        $("act").style.display = "none";            // hide at once, don't wait for Jarvis
+        hideUntil = Date.now() + 2500;              // and keep it hidden while Jarvis catches up
+        act("stop_activity");
+      });
+      // Tic-tac-toe: tap a free square to play there
+      $("board").addEventListener("click", (e) => {
+        const c = e.target.closest(".cell");
+        if (c && !c.classList.contains("x") && !c.classList.contains("o")) {
+          c.style.opacity = "0.5";
+          act("ttt_" + c.dataset.i);
+        }
+      });
 
       // ---------- Banners and activity cards ----------
       function showBanner(e) {
@@ -1158,7 +1214,7 @@
           $("board").innerHTML = a.board
             .map(
               (v, i) =>
-                `<div class="cell ${v ? v.toLowerCase() : ""}${(a.win || []).includes(i) ? " win" : ""}">` +
+                `<div class="cell ${v ? v.toLowerCase() : ""}${(a.win || []).includes(i) ? " win" : ""}" data-i="${i}">` +
                 `<span class="num">${i + 1}</span>${esc(v)}</div>`,
             )
             .join("");
@@ -1175,7 +1231,7 @@
         $("hug").style.display = hug ? "flex" : "none";
         $("hug-caption").style.display = hug ? "block" : "none";
         // Share: the QR code (drawn only when it changes, so it doesn't flicker)
-        $("actClose").style.display = a.qr ? "block" : "none";
+        $("actClose").style.display = "block";             // ✕ on every card
         $("qr").style.display = a.qr ? "inline-block" : "none";
         if ((a.qr || "") !== ($("qr").dataset.src || "")) {
           $("qr").dataset.src = a.qr || "";
@@ -1187,6 +1243,25 @@
       $("sosClose").addEventListener("click", () =>
         fetch("/action", { method: "POST", headers: { "X-Jarvis": "1" },
                            body: JSON.stringify({ do: "close_card" }) }));
+      // ✕ on the device screen: first tap asks, second tap (within 3 s) closes Jarvis
+      let closeTimer = null;
+      $("appClose").addEventListener("click", () => {
+        const b = $("appClose");
+        if (!b.classList.contains("armed")) {
+          b.classList.add("armed");
+          b.textContent = "Tap again to close";
+          closeTimer = setTimeout(() => { b.classList.remove("armed"); b.textContent = "✕"; }, 3000);
+          return;
+        }
+        clearTimeout(closeTimer);
+        b.textContent = "Closing…";
+        fetch("/action", { method: "POST", headers: { "X-Jarvis": "1" },
+                           body: JSON.stringify({ do: "close_screen" }) });
+      });
+      // Tap the internet chip to see the log; tap again to hide it
+      $("kNet").addEventListener("click", () => {
+        $("kLog").style.display = $("kLog").style.display === "block" ? "none" : "block";
+      });
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();
@@ -1203,8 +1278,12 @@
             !(s.activity.expires && s.activity.expires < Date.now() / 1000)
               ? s.activity
               : null;
-          showActivity(a);
+          showActivity(Date.now() < hideUntil ? null : a);
           showFace(s, !s.emergency && !a);
+          const LISTEN_LINE = { listening: "🎙️ Listening… speak now", waiting: "💤 Say \"Hey Jarvis\" to talk",
+                                thinking: "⏳ Thinking…", speaking: "🔊 Speaking…" };
+          $("actListen").textContent = LISTEN_LINE[s.status] || "";
+          $("actListen").className = "act-listen " + (s.status || "");
           // Status icons (quiet mode now; online and mic come next)
           // Status icons: network, microphone, voice
           const icons = [];
@@ -1213,10 +1292,14 @@
           else if (s.online === false)
             icons.push(`<span class="warn" data-do="toggle_offline">✈️ Offline</span>`);
           else icons.push(`<span data-do="toggle_offline">🌐 Online</span>`);
-          if (s.mic_muted)
+          if (s.mic_switch)
+            icons.push(`<span class="warn" data-do="toggle_mic">🔇 Muted (switch)</span>`);
+          else if (s.mic_muted)
             icons.push(`<span class="warn" data-do="toggle_mic">🔇 Mic muted</span>`);
           else if (s.mic === false)
             icons.push(`<span class="warn" data-do="toggle_mic">🔇 Mic off</span>`);
+          else if (s.status === "listening")
+            icons.push(`<span class="live" data-do="toggle_mic">🎙️ Listening</span>`);
           else icons.push(`<span data-do="toggle_mic">🎙️ Mic on</span>`);
           icons.push(
             s.quiet
@@ -1233,7 +1316,7 @@
           }
           if (s.mic === false && $("faceWrap").style.display !== "none") {
             $("hint").textContent =
-              "🔇 My microphone is off, so I can't hear anything.";
+              "🔇 " + (s.mic_detail || "My microphone is off") + ", so I can't hear anything.";
           }
 
           // Quiet mode: show the last answer in a speech bubble for 20 seconds
@@ -1241,6 +1324,18 @@
           $("bubble").style.display =
             s.quiet && fresh && s.last_reply ? "block" : "none";
           $("bubble").textContent = s.last_reply || "";
+          // Device screen: what Jarvis heard, and what went online
+          const kFresh = s.status === "thinking" || s.status === "speaking"
+            || (s.reply_at && Date.now() / 1000 - s.reply_at < 30);
+          $("kHeard").textContent = s.last_heard ? "👂 \u201c" + s.last_heard + "\u201d" : "";
+          $("kHeard").style.opacity = s.last_heard && kFresh ? 1 : 0;
+          const kt = s.totals || {};
+          const kTotal = (kt.ok || 0) + (kt.failed || 0) + (kt.blocked || 0);
+          $("kNet").textContent = `🌐 Internet: ${kTotal} call${kTotal === 1 ? "" : "s"}`;
+          $("kLog").innerHTML = "<b>What left this device</b><table>" + ((s.log || []).slice(0, 5).map((e) =>
+            `<tr><td>${esc((e.time || "").slice(11, 16))}</td><td>${esc(e.tool)}</td>`
+            + `<td>${e.sent != null ? "sent: " + esc(e.sent) : "nothing sent"}</td><td>${esc(e.host || "")}</td></tr>`
+          ).join("") || "<tr><td>Nothing has gone online yet.</td></tr>") + "</table>";
           $("heard").textContent = s.last_heard || "—";
           $("reply").textContent = s.last_reply || "—";
           $("route").textContent = s.route || "—";

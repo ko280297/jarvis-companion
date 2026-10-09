@@ -6,5 +6,10 @@ UNSAFE = re.compile(r"\b(kill|murder|stab|shoot|bomb|hurt|attack|rape|poison|kid
 REFUSAL = "Hmm, that didn't sound right, so I won't save it. If I misheard you, please say it again."
 
 
+UNSAFE_MORE = re.compile(
+    r"\bhide (?:a |the )?(?:dead )?(?:body|corpse)\b|\bhide (?:someone|somebody|a person)\b(?!['’]s)"
+    r"|\bget rid of (?:a |the )?(?:body|corpse)\b|\bmake (?:a )?(?:bomb|weapon|explosive)s?\b")
+
+
 def is_unsafe(text):
-    return bool(UNSAFE.search(text.lower()))
+    return bool(UNSAFE.search(text.lower()) or UNSAFE_MORE.search(text.lower()))

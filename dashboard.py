@@ -13,8 +13,10 @@ STATE = {"status": "starting", "last_heard": "", "last_reply": "",
          "route": "", "confidence": None, "memories": 0, "emergency": None, "activity": None}
 LOG_FILE = Path("online_log.jsonl")
 PAGE = Path(__file__).with_name("dashboard.html")
+STOP = threading.Event()                     # ✕ tapped on a card: exercises check this and stop at once
 ACTIONS = queue.Queue()                      # buttons pressed on the screen, read by main.py
-ALLOWED = {"toggle_quiet", "toggle_offline", "toggle_mic", "close_card"}
+ALLOWED = {"toggle_quiet", "toggle_offline", "toggle_mic", "close_card", "close_screen"}
+ALLOWED |= {"stop_activity"} | {f"ttt_{i}" for i in range(9)}   # ✕ on cards, tic-tac-toe squares
 PORT = 8000
 
 
@@ -59,6 +61,22 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, AttributeError):
                 action = None
             if action in ALLOWED:
+                if action == "stop_activity":         # ✕ on any card: gone at once, Jarvis stops it right after
+                    STATE["activity"] = None
+                    STOP.set()
+                    try:
+                        import share
+                        share._shares.clear()
+                    except Exception:
+                        pass
+                if action == "close_card":            # the card goes at once, even while Jarvis is listening
+                    STATE["activity"] = None
+                    STATE["emergency"] = None
+                    try:
+                        import share
+                        share._shares.clear()          # and the share link closes too
+                    except Exception:
+                        pass
                 ACTIONS.put(action)
                 self._reply(200, b"ok", "text/plain")
                 return
