@@ -54,6 +54,77 @@ FREE = re.compile(r"\b(?:when am i free|when (?:am i|i am) not busy|when do i ha
                   r"|am i free\b|do i have (?:any )?free time|am i busy)\b", re.I)
 EVENING_Q = re.compile(r"\b(?:evening check|how did my day go|how was my day|how much did i (?:do|finish|get done)"
                        r"|review my day|what did i (?:finish|complete|get done) today)\b", re.I)
+# fix 107: "What should I do first?" -> one task, picked by code, with the reason
+WHAT_FIRST = re.compile(
+    r"\bwhat should i (?:do|start|work on|focus on|pick|finish|tackle)(?:\s+(?:first|next|now|today))?\s*[?.!]*$"
+    r"|\bwhere (?:should|do) i start\b|\bwhat (?:to|do i|can i) do (?:first|next)\b"
+    r"|\bwhat(?:'s| is) (?:my )?(?:top|first|next|biggest|main) (?:priority|task|thing|job)\b"
+    r"|\bwhat(?:'s| is) (?:the )?(?:one|first) thing\b|\bwhat(?:'s| is) (?:the )?most important (?:task|thing)?"
+    r"|\bwhich (?:task|one|work|job|thing) (?:first|should i do|do i do)\b|\bhelp me prioriti[sz]e\b|\bprioriti[sz]e my\b", re.I)
+NOT_THAT = re.compile(r"^(?:not (?:that|this)(?: one)?|something else|another one|(?:the )?next(?: one)?|skip(?: it| that)?"
+                      r"|anything else|what else|i (?:can'?t|don'?t want to) do that(?: now)?)\b", re.I)
+_first = {"skipped": [], "at": 0.0}
+
+
+def _why(r, today):
+    """The reason, in plain words: the code's own ranking, said back."""
+    if r["due"] and r["due"] < today:
+        d = date.fromisoformat(r["due"])
+        return f"it was due on {d:%A}, so it's overdue"
+    if r["due"] == today:
+        return "it's due today" + (", and it's marked important" if r["important"] else "")
+    if r["important"]:
+        return "it's marked important"
+    if r["due"]:
+        return _due_words(r["due"]).replace("due", "it's due", 1)
+    if r["day"] and r["day"] < today:
+        return f"it's been waiting since {date.fromisoformat(r['day']):%A}"
+    return "it's the first one on today's list"
+
+
+def what_first(memory, reminders=None, skip=()):
+    """fix 107: one task to start with, ranked by the code (never the AI):
+    overdue -> due today -> important -> due in the next 2 days -> waiting since an earlier day -> the rest, oldest first."""
+    today = _iso(date.today())
+    soon = _iso(date.today() + timedelta(days=2))
+    pool = [r for r in _rows(memory, "done = 0 AND (day <= ? OR (due IS NOT NULL AND due <= ?))", (today, soon))
+            if r["id"] not in skip]
+    if not pool:
+        if skip:
+            return {"say": "That was the last one on your list. Want to add something, or take a short break?",
+                    "card": False}
+        left = _rows(memory, "done = 0")
+        return {"say": ("Nothing is planned for today. Want to start one from later: " + left[0]["text"] + "?")
+                if left else "Your to-do list is empty. Want to add something?", "card": False}
+
+    def rank(r):
+        overdue = bool(r["due"] and r["due"] < today)
+        due_today = r["due"] == today
+        due_soon = bool(r["due"] and today < r["due"] <= soon)
+        older = bool(r["day"] and r["day"] < today)
+        return (not overdue, not due_today, not r["important"], not due_soon, not older, r["day"] or "", r["id"])
+    best = sorted(pool, key=rank)[0]
+    _first.update(skipped=list(skip) + [best["id"]], at=time.time())
+    global _touched
+    _touched = best["id"]                                        # so "mark it done" means this task
+    _TOUCH["at"] = time.time()
+    say = f"Start with: {best['text']}. Because {_why(best, today)}."
+    try:                                                         # a reminder very soon comes first
+        now = datetime.now()
+        near = [(d, t, k) for d, t, k in (reminders.upcoming() if reminders else [])
+                if now <= d <= now + timedelta(minutes=30)]
+        if near:
+            mins = max(1, int((near[0][0] - now).total_seconds() // 60))
+            what = "your timer goes off" if near[0][2] == "timer" else f"your reminder: {near[0][1]}"
+            say += f" Heads up: in {mins} minute{'s' if mins != 1 else ''}, {what}."
+    except Exception:
+        pass
+    others = len(pool) - 1
+    if others:
+        say += " Say: next one, if you'd rather do something else."
+    return {"say": say, "card": False}
+
+
 YES = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|please(?: do)?|do it|go ahead|move (?:them|it)|haan|ha)\b", re.I)
 NO = re.compile(r"^(?:no|nope|not now|leave (?:them|it)|don'?t|never ?mind|keep (?:them|it))\b", re.I)
 _SKIP = {"mark", "tick", "check", "done", "task", "tasks", "todo", "list", "with", "that", "this", "finished",
@@ -590,6 +661,11 @@ def handle_todo(text, memory, reminders):
     lower = clean.lower()
     lower = clean.lower()
 
+    if WHAT_FIRST.search(lower):                                 # fix 107
+        return what_first(memory, reminders)
+    if NOT_THAT.match(lower) and time.time() - _first["at"] < 180:
+        return what_first(memory, reminders, skip=_first["skipped"])   # edit option: "not that one"
+
     if _pending and time.time() - _pending["at"] < 180:
         p, _pending = _pending, None
         if p["kind"] in ("carry", "tomorrow") and (YES.match(lower) or NO.match(lower)):
@@ -603,7 +679,8 @@ def handle_todo(text, memory, reminders):
             return {"say": f"Done. {'It is' if n == 1 else f'All {n} are'} on your list for "
                            f"{'tomorrow' if p['kind'] == 'tomorrow' else 'today'}.", "card": p["kind"] == "carry"}
         if p["kind"] == "pick":
-            m = re.search(r"\b(first|1st|one|second|2nd|two|third|3rd|three|both|all)\b", lower)
+            m = re.search(r"\b(first|1st|one|second|2nd|two|third|3rd|three|both|all)\b",
+                          re.sub(r"\b(?:on|oll|al|aal)\b", "all", lower))       # fix 91: "all" heard as "on"
             if m:
                 rows = p["rows"]
                 i = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1, "third": 2, "3rd": 2,
@@ -828,6 +905,9 @@ def _edit_apply(memory, action, rows):
 
 def _ask_or(memory, action, hits):
     global _pending
+    if len(hits) > 1 and action == "done" and len({r["text"].strip().lower() for r in hits}) == 1:
+        # fix 91: two tasks with the same name ("pay rent" today and "pay rent" later): tick the earliest one
+        hits = sorted(hits, key=lambda r: (r["day"] or "9999", r["id"]))[:1]
     if len(hits) > 1:
         _pending = {"kind": "pick", "action": action, "rows": hits[:3], "at": time.time()}
         same = len({r["text"].strip().lower() for r in hits[:3]}) == 1     # fix 92: same name -> say the day too

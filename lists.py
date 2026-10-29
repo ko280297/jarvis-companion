@@ -433,6 +433,22 @@ def handle_list_command(text, memory):
 
 
 # ---------- Smart path ----------
+HEARD = ""          # fix 91: what the user just said (set every turn), so the AI can't add things nobody said
+
+
+def _said(item, heard):
+    """True if most of the item's words were really said ('grocery items for the week' after 'list,' -> False)."""
+    stop = {"the", "a", "an", "of", "for", "to", "my", "some", "and", "with", "in", "on"}
+    words = [w for w in re.findall(r"[a-z0-9]+", item.lower()) if w not in stop]
+    nums = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
+            "nine": "9", "ten": "10", "twelve": "12", "a": "1", "an": "1"}
+    said = set(re.findall(r"[a-z0-9]+", heard.lower()))
+    said |= {nums[w] for w in said if w in nums} | {w.replace("liter", "litre") for w in said}
+    stem = lambda w: w[:-1] if w.endswith("s") and len(w) > 3 else w
+    said |= {stem(w) for w in said}
+    return not words or sum(1 for w in words if w in said or stem(w) in said) / len(words) >= 0.75
+
+
 def run_list_tool(name, args, memory):
     """The LLM chose a list tool. Check every argument, then do the work ourselves."""
     list_name = match_list(str(args.get("list_name") or ""), memory)
@@ -440,6 +456,8 @@ def run_list_tool(name, args, memory):
     if len(item) > MAX_ITEM_LENGTH:
         return "That's a bit long for a list item. Could you say it shorter?"
 
+    if name == "add_to_list" and HEARD and not _said(item, HEARD):    # fix 91: the AI never invents an item
+        return "I didn't add anything. Say it like: add milk to my grocery list."
     if name == "add_to_list" and re.search(r"\blists?\b", item, re.I):     # fix 88: a list's name, not an item
         return "That sounds like the name of a list, not something to add. What should I add, and to which list?"
     if name == "add_to_list":

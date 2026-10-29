@@ -124,6 +124,12 @@ def handle(text):
     low = re.sub(r"^(?:hey |ok |okay )?jarvis,?\s*", "", text.lower().strip(" .!?")).replace("’", "'")
     low = re.sub(r"\s+(?:please|jarvis)$", "", low)
     recent = LAST["word"] and time.time() - LAST["t"] < 180
+    try:                                       # fix 107: "next one" after "what should I do first?" is a task
+        import todo
+        if todo._first["at"] > LAST["t"]:
+            recent = False
+    except Exception:
+        pass
 
     if recent and MORE.match(low):
         if LAST["i"] + 1 >= len(LAST["senses"]):

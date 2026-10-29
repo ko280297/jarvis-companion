@@ -654,3 +654,37 @@ tell me the latest news || India|can't reach
 add 2 kg of rice to the rice || !rice list
 add 2 kg of rice to my grocery list || Added 2 kg of rice|2 kg of rice
 what's the weather in hardui tomorrow || Hardoi|can't reach
+
+# Fix 107: "What should I do first?" (one task, picked by code, with the reason) and saved names stay private
+add water the plants to my to-do list || water the plants
+add file the taxes to my to-do list, it's important || file the taxes
+add pay the gas bill to my to-do list by today || pay the gas bill
+what should I do first || Start with: .*Because it's (?:due today|overdue|marked important)
+next one || Start with:
+not that one || Start with:|last one on your list
+what should I do this weekend || !Start with
+my colleague's name is Arjun || Arjun
+news about Arjun || won't send it online|can't reach
+
+# Fix 108: prepare me before things (your notes, memories and tasks, a few minutes before)
+take a note: ask the bank manager about the loan form || Saved your note
+add collect the bank passbook to my to-do list || bank passbook
+remind me in 5 minutes to go to the bank || In 5 minutes: go to the bank\. .*loan form.*bank passbook
+what time is it || !In \d+ minutes?: go to the bank
+remind me in 6 minutes to water the garden || remind
+what time is it || !In \d+ minutes?: water the garden
+what will you prepare me for || I'll prepare you for: go to the bank|Nothing today
+prepare me 20 minutes before || 20 minutes before
+stop preparing me || won't prepare you
+start preparing me again || I'll prepare you 20 minutes
+
+# Fix 109: whose name it is (Hindi), more people, "and/Add, add ... to my list", "close the to-do list"
+My dog's name is Moti || Got it: your dog is Moti
+who is my dog || Moti
+my grandmother's name is Kamla || your grandmother is Kamla
+meet my uncle || What's his name
+and call the electrician to my to-do list, it's important. || call the electrician
+Add, add, buy stamps to my to-do list. || Added to your to-do list: buy stamps
+and what is on my to-do list || !Added
+Jarvis close the to-do list. || !don't have a to-do list
+what's on my to-do list || call the electrician

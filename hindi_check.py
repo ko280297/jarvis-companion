@@ -203,7 +203,9 @@ def code_checks():
              "ठीक है, मैं आपको याद दिलाऊँगा: मम्मी को फ़ोन करना, कल सुबह 9:30 बजे।"),
             ("Okay, I'll remind you: call mom, in 5 minutes.", "ठीक है, मैं आपको याद दिलाऊँगा: मम्मी को फ़ोन करना, 5 मिनट में।"),
             ("Timer set. I'll let you know in 3 minutes.", "टाइमर लगा दिया। 3 मिनट में बता दूँगा।"),
-            ("It is 6:17 PM.", "अभी शाम के 6:17 बजे हैं।"), ("It is 9:05 AM.", "अभी सुबह के 9:05 बजे हैं।")]:
+            ("It is 6:17 PM.", "अभी शाम के 6:17 बजे हैं।"), ("It is 9:05 AM.", "अभी सुबह के 9:05 बजे हैं।"),
+            ("Start with: call mom. Because it's due today. Say: next one, if you'd rather do something else.",
+             "पहले यह कीजिए: मम्मी को फ़ोन करना। क्योंकि यह आज ही करना है। कुछ और करना हो, तो कहिए: अगला।")]:
         got = h.to_hindi(en)
         check(f"{en[:60]}…", got == want, got)
     check("“Anytime!” -> “कभी भी!” (was “किसी भी समय बड़ा”)", h.to_hindi("Anytime!") == "कभी भी!", h.to_hindi("Anytime!"))
@@ -235,6 +237,20 @@ def code_checks():
           got == "हो गया! मैंने टिक कर दिया: पौधों को पानी दें।", got)
     got = h.to_hindi("I didn't change anything. Did you mean: tick off water the plants? Say yes or no.")
     check("“Did you mean: tick off X?” -> “…: X टिक कर दूँ?”", "क्या आपका मतलब था: पौधों को पानी दें टिक कर दूँ? हाँ" in got, got)
+    # fix 109: whose name it is, read by the code (29 Oct: "मेरे साथी का नाम अर्जुन है" -> "My name is Arjun.")
+    W = h.whose_name
+    check("“मेरे साथ ही का नाम अर्जुन है” (Vosk for साथी) -> my colleague, never “my name”",
+          W("मेरे साथ ही का नाम अर्जुन है", "My name is Arjun.") == ("My colleague's name is Arjun", ""))
+    check("“मेरी मम्मी का नाम सुनीता शर्मा है” -> my mother's name is Sunita Sharma",
+          W("मेरी मम्मी का नाम सुनीता शर्मा है", "My mother is Sunita Sharma.") == ("My mother's name is Sunita Sharma", ""))
+    check("“मेरी गली का नाम अर्जुन है” (unknown whose) -> asks, never guesses",
+          W("मेरी गली का नाम अर्जुन है", "My street name is Arjun.")[1] == h.WHOSE_UNSURE)
+    check("“मेरे भाई का नाम क्या है” stays a question, about the brother",
+          W("मेरे भाई का नाम क्या है", "What is my name?") == ("What is my brother's name?", ""))
+    check("“मेरा नाम कृति है” (your own name) is not touched",
+          W("मेरा नाम कृति है", "My name is Krati.") == ("My name is Krati.", ""))
+    check("“मेरे गाँव का नाम सांडी है” -> remember (a place, not a person)",
+          W("मेरे गाँव का नाम सांडी है", "My village is named Sandi.") == ("Remember that my village's name is Sandi", ""))
     h.models_present, _ = saved[0], h._parts.update(saved[1])
     h._mode["wanted"] = False
 

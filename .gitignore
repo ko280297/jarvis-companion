@@ -42,3 +42,5 @@ memories-test.db
 share_*.html
 jarvis_run*
 *.wrong-file
+
+test_result.txt

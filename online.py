@@ -184,6 +184,7 @@ def check_internet():
     except requests.RequestException:
         return False
 
+PRIVATE_NAMES = set()        # fix 107: names you've told Jarvis about (set by main.py each time): never sent online
 NOT_A_PLACE = {"the", "latest", "today", "todays", "today's", "some", "any", "me", "top", "good", "more", "fresh",
                "breaking", "big", "main", "important", "this", "tell", "give", "read", "what", "whats", "what's",
                "us", "all", "recent", "new", "current", "local", "world", "india", "indian", "national",
@@ -235,6 +236,9 @@ def get_news(n=3, where="world", lang="en"):
         r = _get("news", "(nothing - public headlines for India only)", NEWS_INDIA, NEWS_LANG[lang])
         head = "आज की मुख्य ख़बरें।" if hindi else "Top headlines in India."
     else:
+        if where.lower() in {n.lower() for n in PRIVATE_NAMES}:      # fix 107: "news about Arjun" never leaves
+            _log_blocked("news", "(a name you saved)")
+            return "That's a name you've told me about, so I won't send it online. I can get news for a place."
         if where == "__private__" or not CITY_OK.match(where):
             _log_blocked("news", where)
             return "That sounds personal, so I won't send it online. I can get news for a place, like: news from Lucknow."

@@ -76,6 +76,7 @@ import phone   # fix 83
 import hear as hearing   # fix 88
 import remindai   # fix 93
 import hindi   # fix 97: Hindi, fully on device
+import prep   # fix 108: prepare me before things
 dictionary.warm()
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
@@ -980,7 +981,8 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
                 checks += 1
                 if checks % REMINDER_CHECK_EVERY == 0 and (
                        focus_due() or cycle_nudge_due(peek=True) or not dashboard.ACTIONS.empty()
-                        or (reminders.due_now() and not is_focusing() and not meeting_active())):
+                        or (reminders.due_now() and not is_focusing() and not meeting_active())
+                        or (prep.pending(reminders) and not is_focusing() and not meeting_active())):   # fix 108
                     return REMINDER_DUE
             ding()
             question = getattr(wake, "question", None)
@@ -1532,7 +1534,13 @@ def save_city(city, memory):
 
 
 # ---------- Commands ----------
-RELATIONS = r"(friend|sister|brother|mother|mom|father|dad|cousin|colleague|wife|husband|partner)"
+RELATIONS = (r"(friend|sister|brother|mother|mom|father|dad|cousin|colleague|wife|husband|partner"
+             r"|son|daughter|boss|teacher|manager|neighbou?r|grandmother|grandma|grandfather|grandpa|uncle|aunt"
+             r"|nephew|niece|doctor|dog|cat)")                   # fix 109: more people (and pets)
+# fix 109: "and call the bank to my to-do list" / "Add, add, call the bank to my to-do list" -> "add call the bank ..."
+ADD_HEARD = re.compile(r"^(?:jarvis[,\s]+)?(?:(?:add|and|ad)[,\s]+)+(?!(?:what|what's|whats|is|are|how|do|does|which|read|show|"
+                       r"tell|put|note|write|remove|delete|tick|mark|clear|change|move|then|also)\b)"
+                       r"(?=\S.*?\s(?:to|in|on|into) (?:my |the )?[\w-]+(?: [\w-]+)? list\b)", re.I)
 PERSON = re.compile(
     rf"\b(?:this is|meet) my {RELATIONS}[,]?\s+([a-z]+)"
     rf"|\bmy {RELATIONS}'?s? name is\s+([a-z]+)")
@@ -1707,13 +1715,17 @@ def handle_command(text, memory, history, reminders):
         return True
     # Fix 43: "close it" / "stop journaling": closes any card on the screen, like the ✕
     if dashboard.STATE.get("activity") and not qr_on_screen and re.fullmatch(
-            r"(?:please\s+|ok(?:ay)?,?\s+)?(?:close|hide|dismiss|stop|end)(?: it| this| that| the (?:card|screen|window"
-            r"|list|journal\w*|exercise|game|focus|prompt))?(?: now| please)?|stop (?:the )?journal\w*", lower):
+            r"(?:jarvis[,\s]+)?(?:please\s+|ok(?:ay)?,?\s+)?(?:close|hide|dismiss|stop|end)(?: it| this| that| (?:the|my) (?:card|screen|window"
+            r"|(?:[a-z-]+ )?list|journal\w*|exercise|game|focus|prompt))?(?: now| please)?|stop (?:the )?journal\w*", lower):
         dashboard.update(activity=None)
         if getattr(dashboard, "STOP", None) is not None:
             dashboard.STOP.set()
         dashboard.ACTIONS.put("stop_activity")           # the same clean-up as the ✕ on the card
         say("Okay, closed.", "🖐️ closed by voice")
+        return True
+    if re.fullmatch(r"(?:jarvis[,\s]+)?(?:please\s+)?(?:close|hide)(?: the| my) (?:[a-z-]+ )?list(?: now| please)?", lower):
+        say("That list isn't open on my screen right now, so there's nothing to close. Your list is unchanged.",
+            "🖐️ close (nothing open)")                    # fix 109: "close the to-do list" is never "clear" it
         return True
     if re.search(r"\b(?:turn|switch|shut)\s+off\s+(?:the\s+|your\s+|my\s+)?(?:mic|mike|microphone)\b"
                  r"|^(?:the\s+)?(?:mic|mike|microphone)\s+off$", lower):
@@ -2162,8 +2174,10 @@ def handle_command(text, memory, history, reminders):
     if _intro and not _neg.search(lower[:_intro.start()]) and (not m or (m.group(2) or m.group(4)) in NOT_A_NAME):
         # fix 87: "Meet my mother, say hi to her" -> "say" is not her name: greet, and ask for the name
         _rel = _intro.group(1)
-        _pron = ("her" if _rel in ("mother", "mom", "sister", "wife") else
-                 "his" if _rel in ("father", "dad", "brother", "husband") else "their")
+        _pron = ("her" if _rel in ("mother", "mom", "sister", "wife", "daughter", "grandmother", "grandma", "aunt",
+                                   "niece") else
+                 "his" if _rel in ("father", "dad", "brother", "husband", "son", "grandfather", "grandpa", "uncle",
+                                   "nephew") else "their")
         say(f"Hello! It's lovely to meet you. What's {_pron} name? You can say: my {_rel}'s name is, and the name.",
             "🙂 introduction (on device)", tone="bright")
         return True
@@ -2387,6 +2401,7 @@ def main():
     reminders = Reminders()
     todo.REMINDERS = reminders                         # fix 52
     envcare.MEMORY = memory                            # fix 57
+    prep.MEMORY = memory                               # fix 108
     hearing.cleanup(memory)                               # fix 88
     remindai.URL, remindai.MODEL = OLLAMA_URL, LLM_MODEL  # fix 93: the same on-device AI
     hindi.start(memory)                                    # fix 97: Hindi was on last time: load it again
@@ -2494,6 +2509,13 @@ def main():
             announce_due(reminders)
             follow_up = True
             continue
+        if not is_focusing() and not meeting_active():          # fix 108: prepare me before things
+            _prep = prep.due(memory, reminders)
+            if _prep and not (_guest or kidmode.is_on()):        # a guest or a child never hears your notes
+                ding()
+                say(_prep, "📋 prepare me (on device)", tone="gentle")
+                follow_up = True
+                continue
         if focus_screen() and not is_active():       # keep the countdown on screen (unless a game is on)
             dashboard.update(activity=focus_screen())
         if chime_next:
@@ -2600,6 +2622,7 @@ def main():
         text = NOISE_TAGS.sub("", text).strip()                                   # drop [BLANK_AUDIO], (music), *cough*
         text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
         text = learn.apply(text, memory)                                         # fix 74: "P rent" -> "pay rent"
+        text = ADD_HEARD.sub("add ", text)                                       # fix 109: "and/Add, add, X to my list"
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
             print(f"   (ignored repeated phrase, probably background noise: {text})")
@@ -2650,6 +2673,11 @@ def main():
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        _pc = prep.command(text, memory, reminders)    # fix 108: "stop preparing me", "prepare me 20 minutes before"
+        if _pc:
+            say(_pc, "📋 prepare me (on device)")
+            follow_up = True
+            continue
         _hc = hindi.command(text, memory)              # fix 97: "speak in Hindi" / "speak English"
         if _hc:
             say(_hc, "🇮🇳 language (on device)")
@@ -3320,6 +3348,7 @@ def main():
                                r"|\b(?:news|headlines)\b", lower_q)                   # fix 101: "news from Lucknow"
         about_past = re.search(r"\b(?:last (?:week|month|year|night)|yesterday|we had|there was|it was)\b", lower_q)
         if is_request and not about_past:
+            __import__("online").PRIVATE_NAMES = private_names(memory)   # fix 107: saved names never go online
             online_answer = answer_online_question(text, memory.get_setting("home_city"))
             if online_answer:
                 say(online_answer, "🌐 internet (rule)")

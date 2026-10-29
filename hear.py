@@ -10,6 +10,8 @@
 Fix 90 (from the 28 Oct evening log): "tick, pay rent" (a comma), "pick off ...", "I said no", "to-do list" alone,
   "when will it reign next", "remove the mother's name from your memory", "it is wrong, forget that",
   and short replies like "Got it." or "I'll help you with that." when nothing was done.
+Fix 91 (the 28 Oct night log): "pay rent" heard as "parent(s)", "can you pick ... from my to-do list",
+  "- Jarvis, yes. - Yes.", "what is done and what is planned for later?", and the AI never invents an item.
 And a guard for the AI: it can never claim it did something. Only the code changes your data, so a reply like
 "Got it, I'll take care of that" is replaced with what really happened: nothing changed, and what you can say.
 """
@@ -23,11 +25,12 @@ PENDING = None                       # {"text": the command to run on "yes", "t"
 _TODO_HEARD = (r"(?:tubular|tubul[ae]r|tubeler|tubelar|tubler|two[- ]?do|2[- ]?do|to[- ]do|too[- ]do|todo|tudu"
                r"|tu[- ]du|todu|do[- ]?do|dodo|due do)")
 TODO_HEARD = re.compile(rf"\b{_TODO_HEARD}(?=\s+lists?\b)", re.I)
-TICK = re.compile(r"^(?:(?:in|on|from)\s+(?:my\s+|the\s+)?to-do list,?\s+)?"
+TICK = re.compile(r"^(?:(?:and|then|so|okay|ok|please|now|also|can you|could you|will you|would you|jarvis)[,\s]+)*"
+                  r"(?:(?:in|on|from)\s+(?:my\s+|mine\s+|the\s+)?to-do list,?\s+)?"
                   r"(?P<verb>take|tik|tic|tech|thick|tickle|pick|peck|tick|check|cross(?:\s+(?:off|out))?"
                   r"|strike(?:\s+(?:off|out))?|mark)[,\s]+(?:off[,\s]+)?(?P<what>.+?)"
                   r"(?:\s+(?:as\s+)?(?:done|complete(?:d)?|finished))?"
-                  r"(?:,?\s+(?:off|from|in|on)\s+(?:my\s+|the\s+)?to-do list)?[.!?]*$", re.I)
+                  r"(?:,?\s+(?:off|from|in|on)\s+(?:my\s+|mine\s+|the\s+|a\s+)?to-do list)?[.!?]*$", re.I)
 SURE_VERBS = re.compile(r"^(?:tick|check|cross|strike|mark)\b", re.I)
 PLANS = re.compile(r"^(?:[\w']+,?\s+){0,2}?what(?:'s| is| are)\s+(?:the|my|our|today'?s)\s+plans?"
                    r"(?:\s+for\s+today|\s+today)?[?.!]*$", re.I)
@@ -40,13 +43,13 @@ NO = re.compile(r"^(?:no|nope|nahi|nah|not that|don'?t|leave it|never ?mind|canc
 FAKE_ACTION = re.compile(
     r"\b(?:i'?ll|i will|i'?ve|i have|let me)\s+(?:go ahead and\s+|now\s+|just\s+)?(?:take care of|add|added|put|remove"
     r"|removed|delete|deleted|tick|ticked|mark|marked|set|schedule|scheduled|remind|save|saved|note|noted|update"
-    r"|updated|water|book|booked|send|sent|cancel|cancelled|canceled|forget|forgotten|delete|erase|pay|make sure)\b"
+    r"|updated|water|book|booked|send|sent|cancel|cancelled|canceled|forget|forgotten|delete|erase|pay|make sure"
+    r"|look (?:it |that |this )?up|search|find|check on|keep an eye|keep track|monitor|track|watch)\b"
     r"|\bi'?ll help you with (?:that|this|it)\b"
     r"|\bgot it,?\s+i'?ll\b|\b(?:it'?s|that'?s|all|everything'?s) (?:been\s+)?(?:done|added|set|saved|noted|ticked"
     r"|marked|updated|removed|taken care of)\b|^(?:done|all set)\b|\bconsider it done\b"
     r"|\b(?:added|ticked|marked|removed|saved|noted) (?:it|that|this)\b", re.I)
-REFUSAL = re.compile(r"^(?:i'?m\s+)?sorry,?\s+(?:but\s+)?i\s+(?:can'?t|cannot)\s+(?:assist|help)\s+with\s+(?:that|this)"
-                     r"(?:\s+request)?\.?$", re.I)
+REFUSAL = re.compile(r"^(?:i'?m\s+)?sorry,?\s+(?:but\s+)?i\s+(?:can'?t|cannot)\s+(?:assist|help|do)\b", re.I)   # fix 91
 _LISTY = re.compile(r"\b(?:to-do|list|task|tick|remind\w*|grocery|add|remove|delete|mark|done|forget|memory"
                     r"|name|erase|wrong)\b", re.I)
 # A bare "Got it." / "Understood. Let's try again." after a command: nothing was done (fix 90)
@@ -68,8 +71,13 @@ def _open_tasks(memory):
         return []
 
 
+_SOUNDS = [(r"\bparents?\b", "pay rent"), (r"\bpay ?rents\b", "pay rent")]   # fix 91: how "pay rent" is heard
+
+
 def _plain(s):
     s = re.sub(r"[^a-z0-9 ]", " ", s.lower())
+    for a, b in _SOUNDS:
+        s = re.sub(a, b, s)
     return " ".join(w for w in s.split() if w not in ("the", "my", "a", "an", "to", "it", "please", "jarvis"))
 
 
@@ -84,6 +92,26 @@ def closest_task(said, memory, at_least=0.72):
         if s > score:
             best, score = t, s
     return best if score >= at_least else None
+
+
+def learned_verbs(memory):
+    """Words you said for "tick" and then confirmed with yes ("pick" -> tick). Grows with you (fix 91)."""
+    try:
+        return set(filter(None, (memory.get_setting("tick_words") or "").split(",")))
+    except Exception:
+        return set()
+
+
+def learn_verb(memory, verb):
+    if verb in ("take",):                    # "take" is too common a word ("take a break"): always ask
+        return
+    words = learned_verbs(memory)
+    if verb not in words:
+        try:
+            memory.set_setting("tick_words", ",".join(sorted(words | {verb})))
+            print(f"   (learned: when you say '{verb}' about a task, you mean tick)")
+        except Exception:
+            pass
 
 
 def hint_words(memory):
@@ -111,11 +139,14 @@ def process(text, memory, last_said=""):
         pass
     text = re.sub(r"^[\s.,!?]+", "", text)                    # fix 90: Whisper's leading ". "
     low = text.lower().strip(" .!?,")
+    low = re.sub(r"^[\s\-–.,!?]*(?:(?:hey|ok|okay)\s+)?(?:jarvis)?[\s\-–.,!?]*", "", low)   # fix 91: "- Jarvis, yes."
     low = re.sub(r"^(?:i said|i say|i mean|i meant)[,\s]+", "", low)      # fix 90: "I said no"
     if PENDING and now - PENDING["t"] < 90:
         p, PENDING = PENDING, None
         if YES.match(low):
             print(f"   (yes: {p['text']})")
+            if p.get("verb"):
+                learn_verb(memory, p["verb"])
             LAST.update(text=p["text"], t=now)
             return {"text": p["text"]}
         if NO.match(low):
@@ -150,6 +181,18 @@ def process(text, memory, last_said=""):
         fixed = f"forget {_fact_in(last_said)}"
         print(f"   (forget that = {fixed}, what I just said)")
 
+    m = re.search(r"\b(?:forget|stop|don'?t)\b.*?\b(\w+)'?\s+(?:means?|as|is|for)\s+tick\b", low)   # fix 91: edit
+    if m and m.group(1) in learned_verbs(memory):
+        memory.set_setting("tick_words", ",".join(sorted(learned_verbs(memory) - {m.group(1)})))
+        return {"say": f"Okay. When you say {m.group(1)}, I'll ask first again."}
+    if re.search(r"\b(?:which|what) words? (?:mean|means|do you treat as) tick\b", low):
+        w = sorted(learned_verbs(memory))
+        return {"say": ("When you say " + " or ".join(w) + " about a task, I tick it. "
+                        f"To change that, say: forget {w[0]} means tick.") if w
+                else "Only tick, check, mark and cross. I haven't learned any other words for it yet."}
+    if DONE_LATER.search(fixed):                                                    # fix 91
+        return {"say": done_and_later(memory)}
+
     if PLANS.match(fixed.strip()):
         print("   (asked about the plans: reading your day)")
         fixed = "what's my day"
@@ -157,15 +200,48 @@ def process(text, memory, last_said=""):
     m = TICK.match(fixed.strip())
     if m:
         what = re.split(r",?\s+(?:tick|take|pick|check|mark)\b", m.group("what"), flags=re.I)[0].strip(" ,.")   # fix 90
+        what = re.sub(r"^(?:(?:on|up|off|out|all|the|task|item|of)[,\s]+)+", "", what, flags=re.I)        # fix 91
         task = closest_task(what, memory, 0.72)
-        if task and SURE_VERBS.match(m.group("verb")):
+        verb = m.group("verb").lower().split()[0]
+        if task and (SURE_VERBS.match(verb) or verb in learned_verbs(memory)):
             fixed = f"tick {task}"
         elif task and closest_task(what, memory, 0.75):
-            PENDING = {"text": f"tick {task}", "t": now}
+            PENDING = {"text": f"tick {task}", "t": now, "verb": verb}
             return {"say": f"Did you mean: tick off {task}? Say yes or no."}
 
     LAST.update(text=fixed, t=now)
+    try:                                       # fix 91: the list feature checks the AI's items against these words
+        import lists
+        lists.HEARD = fixed
+    except Exception:
+        pass
     return {"text": fixed}
+
+
+DONE_LATER = re.compile(r"\bwhat(?:'s| is| are)?\s+(?:all\s+)?(?:done|finished|completed|ticked)\b"
+                        r"|\bwhat(?:'s| is| are)\s+(?:planned\s+)?(?:for\s+)?later\b|\bplanned for later\b"
+                        r"|\bwhat did i (?:finish|complete|tick)\b", re.I)
+
+
+def done_and_later(memory):
+    """'What is done and what is planned for later?' -> both, from the to-do list itself."""
+    try:
+        import todo
+        done = [r["text"] for r in todo._today_tasks(memory) if r["done"]]
+        later = todo._later(memory)
+    except Exception:
+        return "I couldn't read your to-do list right now."
+    from datetime import date
+    def when(r):
+        d = date.fromisoformat(r["day"])
+        diff = (d - date.today()).days
+        return "tomorrow" if diff == 1 else f"on {d:%A}" if diff < 7 else f"on {d.day} {d:%B}"
+    done = [t + (f" ({n} times)" if n > 1 else "") for t, n in
+            {t: sum(1 for x in done if x.lower() == t.lower()) for t in dict.fromkeys(done)}.items()]
+    parts = [("Done today: " + "; ".join(done) + ".") if done else "Nothing is ticked today yet."]
+    parts.append(("Planned for later: " + "; ".join(f"{r['text']}, {when(r)}" for r in later) + ".")
+                 if later else "Nothing is planned for later.")
+    return " ".join(parts)
 
 
 def no_action_reply(text, memory):

@@ -433,6 +433,42 @@ def strip_jarvis(hi):
     return hi
 
 
+# fix 109: "मेरे साथी का नाम अर्जुन है" became "My name is Arjun." (Jarvis then offered to call YOU Arjun!).
+# Whose name it is decides where it's saved, so the code reads that part itself, not the translator.
+RELATIONS = {"brother": "भाई भैया", "sister": "बहन बहिन दीदी", "mother": "माँ मां मम्मी माता माताजी अम्मी",
+             "father": "पापा पिता पिताजी पापाजी अब्बू", "friend": "दोस्त मित्र सहेली फ्रेंड फ्रैंड",
+             "colleague": "साथी सहकर्मी सहयोगी कलीग कुलीग कॉलीग कलिग कॉलिग", "husband": "पति", "wife": "पत्नी वाइफ",
+             "son": "बेटा बेटे", "daughter": "बेटी", "boss": "बॉस", "teacher": "टीचर शिक्षक अध्यापक",
+             "manager": "मैनेजर", "neighbour": "पड़ोसी पड़ोसन पडोसी", "grandmother": "दादी नानी",
+             "grandfather": "दादा दादाजी नाना नानाजी", "uncle": "चाचा मामा ताऊ", "aunt": "चाची मामी बुआ मौसी ताई",
+             "nephew": "भतीजा भतीजे भांजा भांजे", "niece": "भतीजी भांजी", "doctor": "डॉक्टर डाक्टर",
+             "dog": "कुत्ता कुत्ते", "cat": "बिल्ली", "village": "गाँव गांव", "school": "स्कूल", "college": "कॉलेज",
+             "company": "कंपनी", "office": "ऑफिस ऑफ़िस"}
+REL_HI = {w: en for en, ws in RELATIONS.items() for w in ws.split()}
+REL_HI["साथ ही"] = "colleague"                                # how Vosk hears "साथी"
+WHOSE = re.compile(r"(?:^|\s)(?:मेरे|मेरी|मेरा)\s+(?:(?:बड़े|बड़ी|बडे|बडी|छोटे|छोटी)\s+)?(\S+(?:\s+ही)?)\s+(?:का|की|के)\s+नाम\s+\S")
+WHOSE_UNSURE = "whose name"
+PLACES = {"village", "school", "college", "company", "office"}
+
+
+def whose_name(hi, en):
+    """(english, problem): 'my X's name is Y' with X read from the Hindi by code."""
+    m = WHOSE.search(hi)
+    if not m:
+        return en, ""
+    rel = REL_HI.get(m.group(1)) or REL_HI.get(m.group(1).split()[0])
+    if m.group(1).endswith(" ही") and m.group(1) not in REL_HI:
+        rel = None
+    if re.search(r"नाम\s+(?:क्या|बता|याद|पता)", hi) or en.rstrip().endswith("?"):      # a question, not a new name
+        return (f"What is my {rel}'s name?", "") if rel else (en, "")
+    name = re.search(r"\b(?:name (?:is|was)|is named|is called|is)\s+([^.!?]+?)[.!]*$", en, re.I)
+    if not rel or not name:
+        return en, WHOSE_UNSURE                            # never guess whose name it is: ask
+    if rel in PLACES:                                       # not a person: just remember it
+        return f"Remember that my {rel}'s name is {name.group(1).strip()}", ""
+    return f"My {rel}'s name is {name.group(1).strip()}", ""
+
+
 def to_english(hi):
     """Hindi text -> (English, problem). problem = '' when the code check passed."""
     hi = strip_jarvis(hi)
@@ -455,7 +491,8 @@ def to_english(hi):
         thing = DONE_SAID.split(en)[0] if DONE_SAID.search(en) else en
         thing = re.sub(r"^(?:the )?(?:work|job|task) of\s+", "", thing.strip(" ,.!"), flags=re.I)
         en = f"{tail} {thing[:1].lower() + thing[1:]}".rstrip(" .!") if thing else f"{tail} it"
-    return en, check_english(hi, en)
+    en, unsure = whose_name(hi, en)                         # fix 109
+    return en, unsure or check_english(hi, en)
 
 
 # ------------------------------------------------------------------ 4. Hinglish typed in English letters
@@ -604,6 +641,9 @@ def understand(text):
         return {"say": "माफ़ कीजिए, मैं यह समझ नहीं पाया। कृपया फिर से बोलिए।"}
     LAST.update(heard=hi, english=en)
     print(f"   🇮🇳 {hi}  ->  {en}   [{time.perf_counter() - t:.2f}s]" + (f"  ✗ lost: {problem}" if problem else ""))
+    if problem == WHOSE_UNSURE:                             # fix 109
+        return {"say": f"मैंने सुना: “{hi}”। यह किसका नाम है, मुझे पक्का समझ नहीं आया। "
+                       "ऐसे कहिए: मेरे भाई का नाम अर्जुन है, या: मेरे सहकर्मी का नाम अर्जुन है।"}
     if problem:
         return {"say": f"माफ़ कीजिए, मुझे पक्का समझ नहीं आया। मैंने सुना: “{hi}”। कृपया फिर से बोलिए।"}
     return {"text": en}
@@ -827,6 +867,21 @@ REPLY_FORMS = [                                          # Jarvis's own sentence
     (re.compile(r"^I'?ll let you know (in \d+ \w+)\.$", re.I), _f_letknow),
     (re.compile(r"^It is (\d{1,2}):(\d{2}) ([AP]M)\.$", re.I), _f_time),
     (re.compile(r"^Timer set\.$", re.I), lambda m: ([], lambda t: "टाइमर लगा दिया।")),
+    # fix 108: "Prepare me before things"
+    (re.compile(r"^In (\d+) minutes?: (.+?)\.$", re.I), lambda m: ([m[2]], lambda t: f"{m[1]} मिनट बाद: {t[0]}।")),
+    (re.compile(r'^Your note "(.+?)" says: (.+?)\.?$', re.I),
+     lambda m: ([m[1], m[2]], lambda t: f"आपके नोट “{t[0]}” में लिखा है: {t[1]}।")),
+    (re.compile(r"^Also on your to-do list: (.+?)\.$", re.I), "आपकी टू-डू लिस्ट में यह भी है: {0}।"),
+    # fix 107: "What should I do first?"
+    (re.compile(r"^Start with: (.+?)\.$", re.I), "पहले यह कीजिए: {0}।"),
+    (re.compile(r"^Because it'?s due today(, and it'?s marked important)?\.$", re.I),
+     lambda m: ([], lambda t: "क्योंकि यह आज ही करना है" + (", और ज़रूरी भी है।" if m[1] else "।"))),
+    (re.compile(r"^Because it'?s marked important\.$", re.I), lambda m: ([], lambda t: "क्योंकि यह ज़रूरी है।")),
+    (re.compile(r"^Because it'?s due tomorrow\.$", re.I), lambda m: ([], lambda t: "क्योंकि यह कल तक करना है।")),
+    (re.compile(r"^Because it'?s the first one on today'?s list\.$", re.I),
+     lambda m: ([], lambda t: "क्योंकि आज की लिस्ट में यह सबसे पहले है।")),
+    (re.compile(r"^Say: next one, if you'?d rather do something else\.$", re.I),
+     lambda m: ([], lambda t: "कुछ और करना हो, तो कहिए: अगला।")),
     (re.compile(r"^Your (.+? list) has: (.+?)\.$", re.I), _f_list_has),
     (re.compile(r"^You have (\d+) tasks? left today\.?$", re.I), _f_tasks_left),
     (re.compile(r"^(\d+) left\.$", re.I), lambda m: ([], lambda t: f"{m[1]} बाकी।")),
