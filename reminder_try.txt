@@ -1,0 +1,11 @@
+# Reminders the way people really say them (fix 93, 94, 95)
+ping me around half past six to call didi || call didi
+don't let me forget to pay the electricity bill tomorrow evening || pay the electricity bill, at 6 PM tomorrow
+nudge me in an hour and a half about the laundry || laundry
+I have to call the bank at 4, remind me 15 minutes before || call the bank, at 3:45 PM
+remind me when it's 7 in the evening to call dad || call dad
+remind me 7 something in the evening to cook || Should I set it|At what time|couldn't work out
+7 pm || cook
+remind me at 5 to call mom and 3 hours later to sleep || Should I set it|At what time|first reminder|couldn't work out
+5 pm || call mom|5 PM
+what are my reminders || You have

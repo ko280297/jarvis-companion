@@ -82,6 +82,11 @@ def fake_listen(wake, reminders, follow_up=False, max_seconds=8, silence=1.5, ti
             raw = input("\n" + prompt).strip()
         except EOFError:                           # end of a test script
             raise KeyboardInterrupt
+        raw = raw.lstrip("\ufeff")                 # fix 100: a file saved by Notepad can start with an invisible mark
+        if raw.startswith("@act "):                # fix 100: a tap on the screen (e.g. @act pin_2468 types a PIN)
+            main.dashboard.ACTIONS.put(raw[5:].strip())
+            print(f"   [tap on the screen] {raw[5:].strip()}")
+            continue
         if raw.startswith("#"):                    # a section heading
             _section["name"] = raw.lstrip("# ").strip()
             print(f"\n========== {_section['name']} ==========")
@@ -102,6 +107,16 @@ def fake_listen(wake, reminders, follow_up=False, max_seconds=8, silence=1.5, ti
 def fake_transcribe(stt, audio, memory):
     return _typed["text"]
 
+
+if SANDBOX:                                        # fix 100: the test always starts from the same small profile,
+    class _TestMemory(main.MemoryStore):           # never from your real memory: name Krati, city Hardoi
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            if not self.get_setting("user_name"):
+                self.set_setting("user_name", "Krati")
+            if not self.get_setting("home_city"):
+                self.set_setting("home_city", "Hardoi")
+    main.MemoryStore = _TestMemory
 
 main.listen = fake_listen
 main.transcribe = fake_transcribe

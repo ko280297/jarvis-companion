@@ -190,8 +190,10 @@
       .eyes {
         display: flex;
         justify-content: center;
+        align-items: center;  /* fix 104: the eyes close towards their middle... */
+        height: 150px;        /* ...and their box keeps its size, so the mouth never jumps up on a blink */
         gap: 74px;
-        margin-top: 34px;
+        margin-top: 25px;
         transition: transform 0.6s ease;
       }
       .eye {
@@ -459,6 +461,44 @@
         inset: 0;
         pointer-events: none;
       }
+      /* fix 102: Hindi mode - a small "हिंदी" badge, and a namaste when it switches on */
+      .lang-badge {
+        display: none;
+        position: absolute;
+        top: -6px;
+        right: 4px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+        background: linear-gradient(90deg, rgba(255, 153, 51, 0.35), rgba(255, 255, 255, 0.15),
+          rgba(19, 136, 8, 0.35));
+        border: 1px solid rgba(255, 255, 255, 0.25);
+      }
+      .face.hindi .lang-badge {
+        display: block;
+      }
+      /* fix 105: a friendly namaste - the usual happy smiling eyes, one small nod, and 🙏 beside the face */
+      .face.namaste .head {
+        animation: nod 1.2s ease-in-out 1;
+      }
+      @keyframes nod {
+        0%, 100% { transform: translateY(0); }
+        40% { transform: translateY(8px); }
+      }
+      .namaste-hands {
+        position: absolute;
+        right: -10px;
+        top: 70px;
+        font-size: 40px;
+        animation: namastein 2.4s ease-out forwards;
+      }
+      @keyframes namastein {
+        0% { opacity: 0; transform: scale(0.6); }
+        20%, 75% { opacity: 1; transform: scale(1); }
+        100% { opacity: 0; transform: scale(1); }
+      }
       .heart {
         position: absolute;
         font-size: 26px;
@@ -647,6 +687,12 @@
         margin: 18px 0;
         text-align: center;
       }
+      /* fix 77: story pictures */
+      .scene { display: none; font-size: 130px; line-height: 1.15; margin: 6px 0 4px; text-align: center; }
+      .scene.pop { animation: scenepop 0.7s ease-out, scenefloat 3s ease-in-out 0.7s infinite; }
+      @keyframes scenepop { 0% { opacity: 0; transform: scale(0.5) rotate(-10deg); }
+        60% { opacity: 1; transform: scale(1.12) rotate(4deg); } 100% { transform: scale(1) rotate(0); } }
+      @keyframes scenefloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
       .act-title {
         font-size: 22px;
         font-weight: 700;
@@ -746,6 +792,12 @@
         transform: scale(1.18);
         box-shadow: 0 0 36px currentColor;
       }
+      .pinpad { display: none; margin: 4px auto 0; text-align: center; }   /* fix 35 */
+      .pin-dots { font-size: 30px; letter-spacing: 10px; min-height: 36px; line-height: 36px; }
+      .pin-keys { display: grid; grid-template-columns: repeat(3, 80px); gap: 7px; justify-content: center; margin-top: 2px; }
+      .pin-key { height: 52px; border-radius: 12px; background: var(--line); font-size: 28px; font-weight: 700;
+                 display: flex; align-items: center; justify-content: center; user-select: none; cursor: pointer; }
+      .pin-key:active { opacity: 0.5; }
       .board {
         display: none;
         grid-template-columns: repeat(3, 96px);
@@ -781,6 +833,68 @@
       .cell.win {
         background: #1f6f5c;
       }
+      /* fix 62: Jarvis's answer under your words, on the face screen */
+      .kiosk .kstrip { align-items: flex-end; }
+      .kcol { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: 70%; min-width: 0; }
+      .kcol .kheard { max-width: 100%; }
+      .ksaid { color: #fff; background: rgba(0,0,0,0.38); white-space: normal; display: -webkit-box;
+               -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; overflow: hidden;
+               padding: 0 16px; border: 8px solid transparent; border-left: 0; border-right: 0; }
+      /* fix 47: deadline banner */
+      .deadline {
+        display: none;
+        position: fixed;
+        bottom: 14px;
+        left: 16px;
+        max-width: 40vw;
+        padding: 8px 16px;
+        border-radius: 999px;
+        font-size: 16px;
+        font-weight: 600;
+        z-index: 6;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .deadline.soon {
+        background: rgba(255, 176, 32, 0.15);
+        border: 1px solid var(--amber);
+        color: var(--amber);
+      }
+      .deadline.late {
+        background: rgba(255, 93, 93, 0.18);
+        border: 1px solid var(--red);
+        color: var(--red);
+        animation: dlglow 2.4s ease-in-out infinite;
+      }
+      @keyframes dlglow {
+        50% { box-shadow: 0 0 18px rgba(255, 93, 93, 0.55); }
+      }
+      .kiosk .deadline {
+        font-size: 18px;
+        padding: 10px 18px;
+      }
+      /* fix 52: Today card */
+      .today { display: none; text-align: left; max-width: 760px; margin: 6px auto 0; }
+      .today h3 { font-size: 15px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted);
+                  margin: 14px 0 6px; }
+      .tl-row, .task { display: flex; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px;
+                       font-size: 20px; }
+      .tl-row .tm { min-width: 6.2em; font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums; }
+      .tl-row.past { opacity: 0.45; }
+      .task { cursor: pointer; background: rgba(255, 255, 255, 0.03); margin-bottom: 6px; user-select: none; }
+      .task .box { width: 26px; height: 26px; border: 2px solid var(--muted); border-radius: 7px; flex: none;
+                   display: flex; align-items: center; justify-content: center; font-size: 18px; }
+      .task.done .box { background: #2e7d32; border-color: #2e7d32; color: #fff; }
+      .task.done .tx { text-decoration: line-through; opacity: 0.55; }
+      .task .due { margin-left: auto; font-size: 15px; color: var(--muted); white-space: nowrap; }
+      .task .due.over { color: var(--red); }
+      .today .empty { color: var(--muted); font-size: 17px; padding: 4px 10px; }
+      .today .older { margin-top: 12px; font-size: 16px; color: var(--amber); }
+      .kiosk .tl-row, .kiosk .task { font-size: 22px; padding: 8px 12px; }
+      .kiosk .task .box { width: 32px; height: 32px; }
+      .kiosk .today h3 { margin: 10px 0 4px; }
     </style>
   </head>
   <body>
@@ -793,7 +907,8 @@
     </div>
 
     <button id="appClose" class="app-x" title="Close Jarvis">✕</button>
-    <div class="kstrip"><div id="kHeard" class="kheard" style="opacity:0"></div>
+    <div class="kstrip"><div class="kcol"><div id="kHeard" class="kheard" style="opacity:0"></div>
+      <div id="kSaid" class="kheard ksaid" style="opacity:0"></div></div>
       <div id="kNet" class="knet">🌐 Internet: 0 calls</div></div>
     <div id="kLog" class="klog"></div>
     <div id="sos" class="sos">
@@ -803,6 +918,7 @@
     </div>
 
     <!-- Jarvis's face: shown whenever there's no banner or activity -->
+    <div id="deadline" class="deadline" title="Tap to hide"></div>
     <div class="statusbar" id="statusbar"></div>
     <div id="faceWrap" class="face-wrap">
       <div class="clock" id="clock"></div>
@@ -813,6 +929,7 @@
         </div>
         <div class="zz">z z Z</div>
         <div class="hearts" id="hearts"></div>
+        <div class="lang-badge" id="langBadge">हिंदी</div>
         <div class="head">
           <div class="eyes" id="eyes">
             <div class="eye"></div>
@@ -829,11 +946,14 @@
     <div id="act" class="card act">
       <button id="actClose" class="act-close" title="Close">✕</button>
       <div class="act-title" id="act-title"></div>
+      <div id="scene" class="scene"></div>
       <div id="actListen" class="act-listen"></div>
       <div id="act-lines"></div>
+      <div id="today" class="today"></div>
       <div id="timer" class="timer"></div>
       <div id="orbs" class="orbs"></div>
       <div id="board" class="board"></div>
+      <div id="pinpad" class="pinpad"><div id="pinDots" class="pin-dots"></div><div id="pinKeys" class="pin-keys"></div></div>
       <div id="breath" class="breath"></div>
       <div id="hug" class="hug">
         <svg
@@ -964,6 +1084,28 @@
         speaking: "Speaking",
         starting: "Starting…",
       };
+      const LABELS_HI = {                       // fix 102: Hindi mode
+        waiting: "“Hey Jarvis” का इंतज़ार",
+        listening: "सुन रहा हूँ…",
+        thinking: "सोच रहा हूँ (इसी डिवाइस पर)",
+        speaking: "बोल रहा हूँ…",
+        starting: "शुरू हो रहा हूँ…",
+      };
+      let lastLang = "en";
+      function showLang(lang) {
+        $("face").classList.toggle("hindi", lang === "hi");
+        if (lang === lastLang) return;
+        if (lang === "hi") {                      // switched to Hindi: a friendly namaste (happy eyes + nod + 🙏)
+          tapUntil = Date.now() + 2400;            // the usual happy face, like when you tap it
+          $("face").classList.add("namaste");
+          const n = document.createElement("span");
+          n.className = "namaste-hands";
+          n.textContent = "🙏";
+          $("hearts").appendChild(n);
+          setTimeout(() => { $("face").classList.remove("namaste"); n.remove(); }, 2500);
+        }
+        lastLang = lang;
+      }
       const ORB = {
         red: "#ef4444",
         blue: "#3b82f6",
@@ -1036,7 +1178,18 @@
             day: "numeric",
             month: "long",
           });
-        if (Date.now() >= tapUntil && Date.now() >= petUntil) {
+        if (Date.now() >= tapUntil && Date.now() >= petUntil && s.lang === "hi") {
+          $("hint").textContent =                  // fix 102: Hindi mode
+            mood === "sleep"
+              ? "श्श… “Hey Jarvis” कहकर जगाइए"
+              : mood === "listen"
+                ? "मैं सुन रहा हूँ…"
+                : mood === "think"
+                  ? "सोच रहा हूँ, इसी डिवाइस पर"
+                  : s.status === "speaking"
+                    ? ""
+                    : "“Hey Jarvis” कहिए";
+        } else if (Date.now() >= tapUntil && Date.now() >= petUntil) {
           $("hint").textContent =
             mood === "sleep"
               ? "Shh… say “Hey Jarvis” to wake me"
@@ -1151,6 +1304,14 @@
         hideUntil = Date.now() + 2500;              // and keep it hidden while Jarvis catches up
         act("stop_activity");
       });
+      // fix 52: tap a task to tick / untick it
+      $("today").addEventListener("click", (e) => {
+        const t = e.target.closest(".task");
+        if (t) {
+          t.classList.toggle("done");
+          act(t.dataset.log ? "rlog_" + t.dataset.log : "todo_" + t.dataset.id);   // fix 59
+        }
+      });
       // Tic-tac-toe: tap a free square to play there
       $("board").addEventListener("click", (e) => {
         const c = e.target.closest(".cell");
@@ -1158,6 +1319,26 @@
           c.style.opacity = "0.5";
           act("ttt_" + c.dataset.i);
         }
+      });
+
+      // Fix 35: PIN pad, only for "forget everything" and changing your name. The PIN goes only to Jarvis (127.0.0.1).
+      let pinTyped = "", lastPinId = null;
+      $("pinKeys").innerHTML = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "✓"]
+        .map((k) => `<div class="pin-key" data-k="${k}">${k}</div>`).join("");
+      $("pinKeys").addEventListener("click", (e) => {
+        const k = e.target.closest(".pin-key");
+        if (!k) return;
+        const v = k.dataset.k;
+        if (v === "⌫") pinTyped = pinTyped.slice(0, -1);
+        else if (v === "✓") {
+          if (pinTyped.length >= 4) {
+            act("pin_" + pinTyped);
+            pinTyped = "";
+            $("act").style.display = "none";
+            hideUntil = Date.now() + 2500;
+          }
+        } else if (pinTyped.length < 8) pinTyped += v;
+        $("pinDots").textContent = "•".repeat(pinTyped.length) || "_ _ _ _";
       });
 
       // ---------- Banners and activity cards ----------
@@ -1187,9 +1368,49 @@
         $("act").style.display = a ? "block" : "none";
         if (!a) return;
         $("act-title").textContent = a.title;
+        const sc = $("scene");                                  // fix 77: story pictures
+        if (a.scene) {
+          sc.style.display = "block";
+          if (sc.dataset.s !== a.scene) {
+            sc.dataset.s = a.scene;
+            sc.textContent = a.scene;
+            sc.classList.remove("pop");
+            void sc.offsetWidth;
+            sc.classList.add("pop");
+          }
+        } else {
+          sc.style.display = "none";
+          sc.dataset.s = "";
+        }
         $("act-lines").innerHTML = (a.lines || [])
           .map((l) => `<div class="act-line">${esc(l)}</div>`)
           .join("");
+        // fix 52: Today card (timeline + tasks with tick boxes)
+        const td = a.today;
+        $("today").style.display = td ? "block" : "none";
+        if (td) {
+          const html =
+            "<h3>Timeline</h3>" +
+            (td.timeline.length
+              ? td.timeline.map((r) => `<div class="tl-row${r.past ? " past" : ""}"><span class="tm">${esc(r.time)}</span>` +
+                  `<span>${esc(r.text)}</span></div>`).join("")
+              : `<div class="empty">No meetings or reminders with a time today.</div>`) +
+            ((td.rang || []).length ? "<h3>Reminders today</h3>" + td.rang.map((r) =>
+                `<div class="task${r.done ? " done" : ""}" data-log="${r.id}"><span class="box">${r.done ? "✓" : ""}</span>` +
+                `<span class="tx">${esc(r.time)} · ${esc(r.text)}</span></div>`).join("") : "") +   // fix 59
+            "<h3>Tasks</h3>" +
+            (td.tasks.length
+              ? td.tasks.map((t) => `<div class="task${t.done ? " done" : ""}" data-id="${t.id}">` +
+                  `<span class="box">${t.done ? "✓" : ""}</span><span class="tx">${t.star ? "⭐ " : ""}${esc(t.text)}</span>` +
+                  (t.due ? `<span class="due${t.due === "overdue" ? " over" : ""}">${esc(t.due)}</span>` : "") +
+                  `</div>`).join("")
+              : `<div class="empty">Nothing on your to-do list. Say: add call the bank to my to-do list.</div>`) +
+            (td.older ? `<div class="older">${td.older} unfinished from before. Say: move them to today.</div>` : "");
+          if ($("today").dataset.html !== html) {
+            $("today").dataset.html = html;
+            $("today").innerHTML = html;
+          }
+        }
         const tm = a.timer;
         $("timer").style.display = tm ? "block" : "none";
         if (tm) {
@@ -1219,6 +1440,9 @@
             )
             .join("");
         }
+        $("pinpad").style.display = a.pinpad ? "block" : "none";   // fix 35: PIN pad
+        if (a.pinpad && a.pin_id !== lastPinId) { lastPinId = a.pin_id; pinTyped = ""; }
+        if (a.pinpad) $("pinDots").textContent = "•".repeat(pinTyped.length) || "_ _ _ _";
         const b = a.breath;
         $("breath").style.display = b ? "block" : "none";
         if (b && b.id !== lastBreath) {
@@ -1262,17 +1486,48 @@
       $("kNet").addEventListener("click", () => {
         $("kLog").style.display = $("kLog").style.display === "block" ? "none" : "block";
       });
+      // Fix 47: deadline banner. Yellow: due within the hour. Red: just rang (5 minutes). Tap to hide.
+      let dlHidden = "";
+      function showDeadline(d) {
+        const el = $("deadline");
+        const now = Date.now() / 1000;
+        const rang = ((d && d.rang) || []).filter((r) => now - r.at < 1800);
+        const soon = ((d && d.soon) || []).filter((r) => r.due > now && r.due - now <= 3600);
+        let cls = "", text = "", html = "";
+        if (rang.length) {
+          const r = rang[rang.length - 1];
+          cls = "late"; text = r.text; html = "⏰ Now: " + esc(r.text);
+        } else if (soon.length) {
+          const r = soon[0];
+          const m = Math.max(1, Math.ceil((r.due - now) / 60));
+          cls = "soon"; text = r.text; html = "⏰ " + esc(r.text) + " · in " + m + " min";
+        }
+        if (!html || cls + text === dlHidden) { el.style.display = "none"; return; }
+        el.dataset.key = cls + text;
+        if (el.innerHTML !== html) el.innerHTML = html;
+        el.className = "deadline " + cls;
+        el.style.display = "block";
+      }
+      $("deadline").addEventListener("click", () => {
+        dlHidden = $("deadline").dataset.key || "";
+        $("deadline").style.display = "none";
+      });
+      let pageV = null;
       async function tick() {
         try {
           const s = await (await fetch("/state")).json();
+          if (pageV === null) pageV = s.page_v;     // fix 104: the page was updated -> reload by itself
+          else if (s.page_v && s.page_v !== pageV) { location.reload(); return; }
           $("dot").style.background = COLORS[s.status] || "var(--grey)";
           $("dot").classList.toggle(
             "pulse",
             s.status === "listening" || s.status === "thinking",
           );
-          $("status").textContent = LABELS[s.status] || s.status;
+          $("status").textContent = (s.lang === "hi" ? LABELS_HI : LABELS)[s.status] || s.status;
+          showLang(s.lang || "en");                // fix 102
           $("memories").textContent = s.memories;
           showBanner(s.emergency);
+          showDeadline(s.deadlines);
           const a =
             s.activity &&
             !(s.activity.expires && s.activity.expires < Date.now() / 1000)
@@ -1299,13 +1554,15 @@
           else if (s.mic === false)
             icons.push(`<span class="warn" data-do="toggle_mic">🔇 Mic off</span>`);
           else if (s.status === "listening")
-            icons.push(`<span class="live" data-do="toggle_mic">🎙️ Listening</span>`);
+            icons.push(`<span class="live" data-do="toggle_mic">🎙️ ${s.lang === "hi" ? "सुन रहा हूँ" : "Listening"}</span>`);
           else icons.push(`<span data-do="toggle_mic">🎙️ Mic on</span>`);
           icons.push(
             s.quiet
               ? `<span class="warn" data-do="toggle_quiet">🤫 Quiet</span>`
               : `<span data-do="toggle_quiet">🔈 Voice</span>`,
           );
+          if (s.kid_mode)                                    // fix 76
+            icons.unshift(`<span style="color:#ffd166;border-color:#ffd166">🧸 Kid mode</span>`);
           const iconsHtml = icons.join("");
           if ($("statusbar").dataset.html !== iconsHtml) {
             $("statusbar").dataset.html = iconsHtml;          // redraw only on a change, so taps aren't lost
@@ -1329,6 +1586,8 @@
             || (s.reply_at && Date.now() / 1000 - s.reply_at < 30);
           $("kHeard").textContent = s.last_heard ? "👂 \u201c" + s.last_heard + "\u201d" : "";
           $("kHeard").style.opacity = s.last_heard && kFresh ? 1 : 0;
+          $("kSaid").textContent = s.last_reply ? "🗣️ " + s.last_reply : "";   // fix 62
+          $("kSaid").style.opacity = s.last_reply && kFresh && !s.quiet ? 1 : 0;
           const kt = s.totals || {};
           const kTotal = (kt.ok || 0) + (kt.failed || 0) + (kt.blocked || 0);
           $("kNet").textContent = `🌐 Internet: ${kTotal} call${kTotal === 1 ? "" : "s"}`;

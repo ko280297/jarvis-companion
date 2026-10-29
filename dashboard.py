@@ -3,6 +3,7 @@ Touch buttons on the screen send small actions back to Jarvis: quiet mode, offli
 and closing a card (like a QR code). Only these four actions exist, and only this device can send them."""
 import json
 import queue
+import re
 import threading
 import time
 from collections import Counter
@@ -46,7 +47,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/state":
             log, totals = _log_summary()
-            self._reply(200, json.dumps({**STATE, "log": log, "totals": totals}).encode(), "application/json")
+            page_v = PAGE.stat().st_mtime if PAGE.exists() else 0     # fix 104: a new page -> the screen reloads itself
+            self._reply(200, json.dumps({**STATE, "log": log, "totals": totals, "page_v": page_v}).encode(),
+                        "application/json")
         else:
             self._reply(200, PAGE.read_bytes(), "text/html; charset=utf-8")
 
@@ -60,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
                 action = json.loads(self.rfile.read(length) or b"{}").get("do")
             except (ValueError, AttributeError):
                 action = None
-            if action in ALLOWED:
+            if action in ALLOWED or (isinstance(action, str) and re.fullmatch(r"pin_\d{4,8}|todo_\d{1,7}|rlog_\d{1,7}", action)):
                 if action == "stop_activity":         # ✕ on any card: gone at once, Jarvis stops it right after
                     STATE["activity"] = None
                     STOP.set()

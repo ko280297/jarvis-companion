@@ -215,6 +215,11 @@ def handle_wellbeing(text, memory, paused=True):
             or any(re.search(rf"\b{t}\b", lower) for m in DATA["moods"].values() if m.get("no_feel_needed")
                    for t in m["triggers"])):
         _mode, _dump, _silences = None, [], 0      # a new request ("I can't sleep"), not part of the thought dump
+    if _mode == "dump" and re.fullmatch(                       # fix 43: stop a thought dump in the middle
+            r"(?:please\s+|ok(?:ay)?,?\s+)?(?:close|stop|end|cancel)(?: it| this| that| now| the (?:card|screen"
+            r"|dump|thought dump|journal\w*))?(?: please)?|stop (?:the )?(?:thought dump|journal\w*)", lower):
+        _mode, _dump, _silences = None, [], 0
+        return [_say("Okay, we'll stop here. Nothing was saved."), ("screen", None)]
     if _mode == "dump":
         _silences = 0
         _dump.append(text)

@@ -16,6 +16,13 @@ MAX_CONTACTS = 3
 CRISIS = re.compile(
     r"\b(hurt|harm|cut|kill)\s+(myself|me)\b|\bsuicid\w*|\bwant to die\b|\bend (?:my life|it all)\b"
     r"|\bdon'?t want to (?:live|be alive|be here)\b|\bno reason to live\b|\bself[- ]harm\b")
+CRISIS = re.compile(CRISIS.pattern                                         # fix 44: more crisis words
+    + r"|\b(?:don'?t|do not) (?:feel like|think|know if|know why|see why) i (?:should|want to|can|need to)"
+      r" (?:live|be alive|go on|keep going|exist)\b"
+      r"|\bshouldn'?t (?:be alive|live|exist)\b|\b(?:no|not any|isn'?t a) (?:point|reason) (?:in|to|of)"
+      r" (?:living|live|life)\b|\b(?:no|not any) (?:point|reason) (?:in )?going on$|\bbetter off (?:dead|without me)\b|\bcan'?t go on(?: anymore| any more| like this| living)?$"
+      r"|\bwant to disappear\b|\bkill myself\b|\bnot worth living\b|\bwish i (?:was|were) dead\b"
+      r"|\bwish i (?:wasn'?t|weren'?t) (?:alive|here|born)\b")
 ACCIDENTAL = re.compile(
     r"\b(?:accidentally|by mistake|by accident|while (?:cooking|cutting|chopping|shaving)|knife slipped|paper cut)\b")
 SEVERE = re.compile(
@@ -206,7 +213,8 @@ def handle_emergency(text, memory):
         return _reply(say, "gentle", banner)
 
     # 4b. Other health questions: be kind, never guess medical advice
-    if SYMPTOM.search(lower):
+    if SYMPTOM.search(lower) and not re.search(                       # fix 47: a reminder or list
+            r"\bremind|\breminders?\b|\blist\b|\bschedule\b|\bto-?do\b", lower):
         _offer_help = True
         amb = _numbers(memory)["ambulance"]
         say = ("I'm sorry you're not feeling well. I can't give medical advice, but if it feels serious "

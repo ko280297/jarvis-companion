@@ -186,7 +186,7 @@ closer QR || gone
 close the QR code || no code
 # Offline mode by voice
 offline mode on || Offline mode on
-any news today || can't reach
+any news today || Offline mode is on|can't reach
 offline mode off || Offline mode off
 # Fix 26: lists without repeats, numbers, clearing
 clear my grocery list || empty
@@ -229,3 +229,428 @@ is it cold outside || !not feeling well
 note cramps || Noted: cramps
 do you have internet access || connected|offline
 goodbye || talk soon
+
+# Fix 32: list questions get the list, fun mode
+add milk to my grocery list || Added|already
+I am asking what is there in my grocery list || milk
+what's in my grocery list || milk
+what can I do in fun mode || tic-tac-toe
+clear my grocery list || clear|empt
+
+# Fix 33: start new, do I have friends
+start new || fresh start
+meet my friend Rhea || Rhea
+do I have friends || Rhea
+
+# Fix 35: PIN on the touch screen
+forget everything || PIN on my screen
+call me Rhea || PIN on my screen
+what's my name || Krati
+
+# Fix 36: change the PIN
+change my PIN || PIN on my screen
+
+# Fix 37: a reminder about a meeting is a reminder
+remind me that there is a meeting tomorrow at 6 pm || remind you
+
+# Fix 39: no guesses about your life
+am I married || don't have that saved
+is my brother older than me || don't have that saved
+
+# Fix 40: when is my ...
+remind me that I have a meeting with the doctor tomorrow at 5 pm || remind you: a meeting with the doctor
+when is my doctor's appointment || doctor
+cancel all reminders || cancel|removed|deleted|no
+
+# Fix 41: casual time words
+remind me in two mins to drink water || drink water, in 2 minutes
+remind me in a couple of minutes to stretch || stretch, in 2 minutes
+cancel all reminders || cancel|removed|deleted|no
+
+# Fix 43: close by voice, stop a thought dump
+give me a journaling prompt || prompt
+close it || closed
+let's do a thought dump || listening
+I had a really long day at work || .*
+stop || stop here
+remove milk from my grocery list || .*
+
+# Fix 44: crisis words, no etc
+I don't feel like I should live || 14416|here for you|not alone|talk
+I'm okay || .*
+I really love painting, reading etc || remember
+yes || Saved
+what do I like || !etc
+
+# Fix 45: weather in offline mode
+offline mode on || Offline mode on
+what is the weather || Offline mode is on
+any news today || Offline mode is on
+offline mode off || Offline mode off
+
+# Fix 46: time left in focus
+focus for 25 minutes on emails || Focus started
+how much time is left || minute
+stop focus || stopped
+
+# Fix 47: daily reminders, snooze, edit, cancel by name
+remind me daily to take medicine at 4 pm || every day at 4 PM: take medicine
+remind me every weekday at 9 am to check emails || every weekday at 9 AM: check emails
+remind me every monday at 10 am to call grandma || every Monday at 10 AM: call grandma
+remind me every 2 hours to drink water || every 2 hours: drink water
+what reminders do I have || every day at 4 PM
+change my medicine reminder to 5 pm || every day at 5 PM: take medicine
+cancel my water reminder || cancelled your reminder: drink water
+stop reminding me to call grandma || call grandma
+snooze || nothing to snooze|remind you again
+add medicine to my shopping list || Added|already
+which medicine should I take for a headache || sorry|doctor|medical advice
+remind me tomorrow at 6 pm to submit the report || submit the report, at 6 PM tomorrow
+move it to 7 pm || submit the report, is now at 7 PM tomorrow
+change the report reminder to send the report to Rahul || now says: send the report to Rahul
+push it by 30 minutes || 7:30 PM tomorrow
+cancel all reminders || cancel
+
+# Fix 50: two reminders with the same name
+remind me in 10 minutes to drink water || drink water, in 10 minutes
+remind me in 20 minutes to drink water || drink water, in 20 minutes
+cancel my water reminder || Which one
+the second one || cancelled your reminder: drink water, in 20 minutes
+remind me in 30 minutes to drink water || drink water, in 30 minutes
+change my water reminder to 9 pm || Which one
+the one in 30 minutes || 9 PM|in \d+ minutes
+cancel my water reminder || Which one
+both || cancelled both
+
+# Fix 52: to-do list and the Today card
+add call the bank to my to-do list || Added to your to-do list: call the bank
+add pay rent to my to-do, it's important || pay rent, marked important
+add submit report to my tasks by Friday || submit report, due (?:Friday|tomorrow|today)
+new task: book train tickets || book train tickets
+what's on my to-do list || pay rent \(important\)
+mark call the bank done || Done: call the bank
+I finished the report || Done: submit report
+untick the report || back on your list
+what's left today || submit report
+remove book train tickets from my to-do list || Removed
+when am I free tomorrow || free
+how did my day go || of
+no || leave them
+move them to tomorrow || Moved
+clear my to-do list || cleared
+
+# Fix 53: 5.15 pm, plans include reminders, misheard to-do / remind me
+remind me tomorrow at 5.15pm about the doctor appointment || doctor appointment, at 5:15 PM tomorrow
+remind me tomorrow at 515 about the dentist || dentist, at 5:15 PM tomorrow
+do I have any appointment tomorrow || doctor appointment, at 5:15 PM
+what is in my total list || to-do
+9. me tomorrow at 6 pm about the gym || gym, at 6 PM tomorrow
+cancel all reminders || cancel
+
+# Fix 54: duplicates, reminders for one day, the reminder at 5 pm, to-do for tomorrow
+remind me tomorrow at 5 pm about the meeting with Rahul || meeting with rahul, at 5 PM tomorrow
+remind me tomorrow at 5 pm about the meeting with Rahul || already have that reminder
+remind me today at 11:59 pm to sleep || sleep
+what reminders do I have for tomorrow || meeting with rahul
+what reminders do I have for tomorrow || !sleep
+what is the reminder at 5 pm || meeting with rahul
+add buy a gift to my to-do list for tomorrow || for tomorrow
+what do I have in my to-do list for tomorrow || buy a gift
+sometimes always add pay rent to my to-do list, is important || Added to your to-do list: pay rent, marked important
+show my do-do || pay rent
+clear my to-do list || cleared
+cancel all reminders || cancel
+
+# Fix 55: environment (in the simulator there is no internet, so it must say so politely)
+what's the AQI || AQI|can't reach|city
+is it a good time to go out || go out|can't reach|city
+what's the best time for a walk || best time|can't reach|city
+can I dry clothes today || dry|can't reach|city
+should I open the windows || window|air|can't reach|city
+when will it rain || rain|can't reach|city
+
+# Fix 57: warnings, asthma care, mosquitoes (no internet in the simulator: it must say so politely)
+I have asthma || asthma care|I'll warn you
+any weather warnings || warning|can't reach|severe|city
+what about mosquitoes || osquito|can't reach|city
+turn on weather warnings || Weather warnings are on
+turn off weather warnings || weather warnings are off
+I don't have asthma anymore || turned off asthma care
+
+# Fix 59: "did I ...?" and "I called mom"
+add call mom to my to-do list || Added
+did I call mom || Not yet
+I called mom || Done: call mom
+did I call mom || Yes, you ticked off call mom
+did I pay the electricity bill || don't have a record
+I wanted to call mom || !Ticked
+clear my to-do list || cleared
+
+# Fix 51: time of day from the clock
+good morning || Good (morning|afternoon|evening)
+is it really morning || it's (morning|afternoon|evening|night)
+is it night || it's (morning|afternoon|evening|night)
+
+# Fix 62: calculator and converter
+what is 245 times 18 || 4,410
+18 percent of 2450 || 441
+split 1850 between 4 people || 462.5 each
+make it 5 people || 370 each
+add 18 percent gst to 1000 || 1,180
+20 percent off on 2000 || 1,600
+what's 7 times 8 || 56
+square root of 144 || 12
+convert 5 km to miles || 3.11 miles
+and in metres || 5,000 metres
+38.5 degrees celsius in fahrenheit || 101.3
+how many grams in 2 kg || 2,000 grams
+100 divided by 0 || divide by zero
+remind me in 5 minutes to drink water || !calculator|times
+
+# Fix 70: correct a saved fact
+remember my birthday is 4 May || remember
+actually my birthday is 5 May || Updated: your birthday is 5 May\. It was 4 May
+what do you remember || 5 May
+what do you remember || !4 May
+undo || put it back: your birthday is 4 May
+remember my birthday is 6 May || remember
+what do you remember || !4 May|5 May
+change my blood group to O positive || remember that your blood group is O positive
+change my blood group to B positive || Updated: your blood group is B positive\. It was O positive
+remember my car number is UP 32 AB 1234 || remember
+forget my car number || forgotten that your car number
+undo || put it back
+my keys are in the drawer || drawer
+my keys are in the kitchen || kitchen
+what do you remember || !drawer
+where are my keys || kitchen
+remind me in 10 minutes to call the bank || remind
+change it to 20 minutes || !Updated
+change my medicine reminder to 5 pm || !remember that
+
+# Fix 71: edit a task
+add water the plants to my to-do list || Added
+change water the plants to water the plants and the lawn || Renamed: water the plants and the lawn\. It was: water the plants
+what's on my to-do list || the lawn
+undo || put it back: water the plants
+add pay rent to my to-do list || Added
+move pay rent to tomorrow || Moved pay rent to tomorrow\. It was today
+make pay rent due friday || pay rent is now due .*had no deadline
+add call the bank to my to-do list || Added
+add call the plumber to my to-do list || Added
+change call to call back || Which one
+the second || Renamed
+remind me in 10 minutes to drink water || remind
+change it to 20 minutes || !Renamed
+change my medicine reminder to 5 pm || !Renamed
+change the voice to female || !Renamed
+remember my birthday is 4 May || remember
+actually my birthday is 5 May || Updated
+what do you remember || thing
+
+# Fix 72: change a list item, move a schedule item
+add milk and bread to my grocery list || Added
+change milk to 2 litres of milk || Done: 2 litres of milk instead of milk, on your grocery list
+replace bread with brown bread || brown bread instead of bread
+what's on my grocery list || brown bread
+undo || put it back: bread
+add dentist on friday at 5 pm to my schedule || schedule
+move the dentist to 6 pm || Moved: dentist on friday at 6 pm, 30 October|Moved: dentist on Friday at 6 pm
+move the dentist to saturday || Moved: dentist .*Saturday.*6 pm
+undo || put it back
+change the voice to female || !instead of
+remind me in 10 minutes to drink water || remind
+change my medicine reminder to 5 pm || couldn't find a medicine reminder
+change my water reminder to 9 pm || 9 PM|Which one
+
+# Fix 73: a new schedule item never clashes with itself
+add yoga class on friday at 7 am to my schedule || !Heads up
+
+# Fix 74: learning from corrections
+add P rent to my to-do list || Added
+no, I said pay rent || Got it: pay rent\. I fixed it, and from now on, p rent means pay rent
+what's on my to-do list || pay rent
+add P rent to my to-do list || pay rent
+when I say by a gift, I mean buy a gift || From now on, by a gift means buy a gift
+add by a gift to my to-do list || buy a gift
+say Krati as Kruh-tee || I'll say Krati
+what have you learned || p rent means pay rent.*Krati as Kruh-tee
+change the p rent fix to pay the rent || Updated: from now on, p rent means pay the rent
+forget the fix for by a gift || won't change by a gift
+when I say by, I mean buy || common word
+I said hello to my friend today || !Got it
+forget everything you learned || forgotten all
+what have you learned || haven't learned
+
+# Fix 75: dictionary (spelling works even before WordNet is installed)
+how do you spell necessary || N, E, C, E, double S, A, R, Y
+spell committee || C, O, double M, I, double T, double E
+how do you spell my name || !spelled: M
+what's the weather tomorrow || !spelled
+
+# Fix 76: kid-safe play mode
+kid mode on || create a PIN
+@act pin_2468
+what time is it
+tell me a story about a crow || Thirsty Crow
+tell me a riddle || riddle
+I don't know || The answer is
+stop || stop
+start a quiz || Question 1
+lion || right|Correct|got it|Not quite
+stop || stop
+what's my name || private
+my name is Aarav || Nice to meet you, Aarav
+remind me in 5 minutes to drink water || grown-up thing
+what's the weather || grown-up thing
+tell me a joke || \?|!
+how do you spell elephant || E, L, E, P, H, A, N, T
+what is 5 times 6 || 30
+kid mode off || PIN
+@act pin_2468
+what time is it
+what's on my to-do list || !grown-up
+
+# Fix 77: kid mode, story with pictures, "don't want"
+kid mode on || create a PIN|Kid mode is on
+@act pin_2468
+what time is it
+I don't want to listen to stories || No problem
+tell me a story about the monkey || Did you like it
+I don't want a story, tell me a joke || !story
+kid mode off || PIN
+@act pin_2468
+what time is it
+
+# Fix 78: patient riddles, longer stories
+kid mode on || create a PIN|Kid mode is on
+@act pin_2468
+what time is it
+tell me a riddle || riddle
+hmm || Take your time
+hint || clue
+banana || Good try! The answer is|Not quite
+I don't know || answer is
+stop || stop
+tell me a story about the crow || Did you like it
+kid mode off || PIN
+@act pin_2468
+what time is it
+
+# Fix 80: kid mode wrap-up
+is kid mode on or not || No, kid mode is off
+is kid mode on || No, kid mode is off
+remind me in 1 seconds to call the bank || remind
+kid mode on || Kid mode is on|PIN
+@act pin_2468
+what time is it || A grown-up has a reminder|It is
+is kid mode on or not || Yes, kid mode is on
+tell me your story || Did you like it
+kid mode off || PIN
+@act pin_2468
+what time is it
+
+# Fix 79: gentler stories
+kid mode on || Kid mode is on|create a PIN|PIN
+@act pin_2468
+what time is it
+tell me a story about the golden goose || Here's a story
+kid mode off || PIN
+@act pin_2468
+what time is it
+
+# Fix 81: encrypted memory
+is my memory encrypted || encrypted with AES-256|isn't encrypted
+is my data safe || encrypted with AES-256|isn't encrypted
+remember my locker code is in the blue diary || remember
+what do you remember || blue diary
+
+# Fix 82: notes
+take a note called meeting prep || listening
+first discuss the budget with the client || Keep going
+then show the new design || Keep going
+end note || Saved your note: Meeting prep
+take a note: buy a gift for Riya || Saved your note: Buy a gift for Riya
+read my notes || Meeting prep.*Buy a gift
+read my meeting prep note || discuss the budget
+add to my meeting prep note: ask about the deadline || Added to your note
+in my meeting prep note, change budget to final budget || final budget instead of budget
+undo || put the note back
+rename the meeting prep note to client call || Renamed: client call
+read the last note || Client call|Buy a gift
+send my client call note to my phone || Scan the code|Wi-Fi
+send my to-do list to my phone || Scan the code|Wi-Fi|empty
+delete my client call note || PIN
+add milk to my grocery list || Added|already
+note down call the electrician || Captured|Added
+
+# Fix 83: phone access
+is my phone connected || No phone is connected
+connect my phone || set up a PIN|Scan the code|Wi-Fi
+disconnect my phone || disconnected
+
+# Fix 88: speech mistakes fixed from your own data, and an honest AI
+add water the plants to my to-do list || water the plants
+what is in my tubular list || water the plants|to-do
+what is in my party list || don't have a party list
+take water plans || Did you mean: tick off water the plants
+yes || water the plants
+add pay rent to my to-do list || pay rent
+in my to-do list, take pay rent || Did you mean: tick off pay rent
+no || didn't change anything
+tick pay rnt || pay rent
+what are the plans? || to-do|tasks?|day|October|reminders
+
+# Fix 87: "meet my mother, say hi to her"
+meet my mother, say hi to her || What's her name
+I'm not going to meet my mother, say hi to her || !Nice to meet you, Say
+meet my father || What's his name
+this is my friend shubhangi || Nice to meet you, Shubhangi
+my mother's name is sunita || Sunita|remember
+what is my mother's name || Sunita
+
+# Fix 90: the 28 Oct evening log
+add pay rent to my to-do list || pay rent
+tick, pay rent || pay rent
+to-do list || tasks?|to-do|nothing
+my sister's name is riya || Riya
+what is my sister's name || Riya
+it is wrong, forget that || forgotten
+what is my sister's name || don't know
+
+# Fix 93: reminders said the way people really say them
+ping me around half past six to call didi || call didi, (?:at 6:30|in \d+ minutes)
+don't let me forget to pay the electricity bill tomorrow evening || pay the electricity bill, at 6 PM tomorrow
+nudge me in an hour and a half about the laundry || laundry, (?:at|in)
+I have to call the bank at 4, remind me 15 minutes before || call the bank, at 3:45 PM
+remind me when it's 7 in the evening to call dad || call dad, (?:at 7 PM|in \d+ minutes)
+remind me at 5 to take 2 tablets || take 2 tablets, (?:at 5|in \d+ minutes)
+remind me tonight to lock the door || lock the door, (?:at 9 PM|in \d+ minutes)
+remind me at quarter to seven to leave || leave, (?:at 6:45|in \d+ minutes)
+
+# Fix 96: mark an existing task important (it used to tick it as done!)
+add call the plumber to my to-do list || call the plumber
+mark call the plumber as important || Marked as important: call the plumber
+what's on my to-do list || call the plumber \(important\)
+call the plumber is not important any more || no longer marked important
+mark call the plumber as done || Done: call the plumber
+
+# Fix 97: Hindi switch, and small English fixes found while testing Hindi
+speak English || English
+my brother's name is Arjun || Got it: your brother is Arjun
+who is my brother || Arjun
+add water the plants to my to-do list || water the plants
+how many tasks are left today || task
+how many apples are on my grocery list || no apples on
+
+# Fix 101: India / city news, and tonight's weather
+news from Lucknow || Lucknow|can't reach
+tell me the news about my diary || personal
+so will it be cloudy all night tonight || Tonight|can't reach
+world news || world|can't reach
+tell me the latest news || India|can't reach
+
+# Fix 104: no surprise new list, quantities said back, your own city
+add 2 kg of rice to the rice || !rice list
+add 2 kg of rice to my grocery list || Added 2 kg of rice|2 kg of rice
+what's the weather in hardui tomorrow || Hardoi|can't reach

@@ -21,6 +21,18 @@ from openwakeword.model import Model as WakeModel
 from pywhispercpp.model import Model as SttModel
 
 import dashboard
+try:
+    import securedb                                   # fix 81: encrypted memory (AES-256, tied to this device)
+    securedb.install()
+except ImportError:
+    securedb = None
+    print("⚠️ Memory is NOT encrypted yet: run  pip install cryptography")
+try:
+    import hardware                                  # the Pi's LEDs and mute switch
+except ImportError:                                  # a laptop has neither
+    class hardware:
+        start = staticmethod(lambda: None)
+        switch_muted = staticmethod(lambda: False)
 from tts import speak as _tts_speak, set_voice
 from memory import MemoryStore, _embed, embed_many
 
@@ -35,15 +47,36 @@ def _add_once(self, text, *args, **kwargs):
         if re.sub(r"\s*\[date:.*?\]", "", old.split(" (saved on")[0]).strip(" .").lower() == core:
             print(f"   (already saved, not added again: {core})")
             return None
+    if memfix.on_add(self, text):                    # fix 70: "my birthday is 5 May" replaces "4 May"
+        print(f"   (replaced an older fact with: {text})")
+        return None
     return _store_add(self, text, *args, **kwargs)
 
 
 MemoryStore.add = _add_once
+_REAL_SLEEP = time.sleep   # fix 42: text-mode tests replace time.sleep
 from tools import answer_time_question, resolve_dates
 from online import answer_online_question, run_tool_call, get_weather, check_place, LAST_CALL, check_internet
+import environment   # fix 55
+import tts as _ttsmod   # fix 58
+import csv   # fix 58
+_TIMING = {}   # fix 58: this turn's timings
+import envcare   # fix 57
 from lists import handle_list_command, run_list_tool, LIST_TOOLS, LIST_TOOL_NAMES, STARTER_LISTS
 from reminders import Reminders, handle_reminder_command
 from summary import SUMMARY_Q, build_summary
+import todo   # fix 52
+import calc   # fix 62
+import memfix   # fix 70
+import learn   # fix 74
+import dictionary   # fix 75
+import kidmode   # fix 76
+import notes   # fix 82
+import phone   # fix 83
+import hear as hearing   # fix 88
+import remindai   # fix 93
+import hindi   # fix 97: Hindi, fully on device
+dictionary.warm()
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
 from wellbeing import handle_wellbeing, clear_journal, clear_session, vent_mode, vent_silence
@@ -77,9 +110,9 @@ MEETING_STT_MODEL = "base.en"  # meetings: slower, but hears names and accents m
 SAMPLE_RATE = 16000
 CHUNK = 1280                # 80 ms
 MAX_RECORD_SECONDS = 20    # longest question allowed
-SILENCE_TO_STOP = 2.0       # seconds of quiet that ends the question
+SILENCE_TO_STOP = 2.0       # seconds of quiet that ends the question (laptop; the Pi uses 1.2)
 NO_SPEECH_TIMEOUT = 4.0     # after the wake word: give up if nothing is said
-FOLLOW_UP_SECONDS = 7.0     # conversation mode: how long to wait for a reply without the wake word
+FOLLOW_UP_SECONDS = 10.0     # conversation mode: how long to wait for a reply without the wake word
 MAX_FOLLOW_UPS = 10         # after this many turns without the wake word, go back to waiting for it
 WAKE_WORD = "hey_jarvis"    # or "hey_mycroft"
 WAKE_THRESHOLD = 0.5
@@ -118,7 +151,7 @@ END_CONVERSATION = re.compile(
 FEATURE_SECTIONS = [
     ("wellbeing", r"well[- ]?being|\bcalm|breath\w*|stress|anxi\w*|mental|relax\w*|exercises?"),
     ("focus", r"\bfocus|productiv\w*|pomodoro"),
-    ("games", r"\bgames?\b"),
+    ("games", r"\bgames?\b|\bfun(?: mode)?\b"),
     ("lists", r"\b(?:grocer\w*|shopping|to-?do|tasks? list|my lists)\b"),
     ("period", r"\bperiods?\b|\bcycle\b"),
     ("meeting", r"\bmeetings?\b"),
@@ -181,7 +214,8 @@ JOKES = [
 ]
 _told = []          # the last few jokes, so they don't repeat
 
-START_OVER = re.compile(r"\b(start (?:over|again|fresh|from scratch)|reset (?:the )?conversation|new conversation)\b")
+START_OVER = re.compile(r"\b(start (?:over|again|fresh|from scratch)|reset (?:the )?conversation|new conversation)\b"
+                        r"|^start (?:a )?new(?: conversation| chat)?$")
 
 SYSTEM_PROMPT = (
     f"You are {ASSISTANT_NAME}, a warm, friendly companion who lives on this device. "
@@ -194,6 +228,7 @@ SYSTEM_PROMPT = (
     "Call the user by the name in the system message. If asked how you are, answer warmly and ask about them. "
     "Never call yourself a computer program."
     " Never make up things you did or felt, like sleeping, eating, waking up or going out."
+    " You have no plans, hobbies or day of your own, so never describe any."
     " You cannot go online yourself; the device only checks the weather, news or a look-up when asked."
 )
 
@@ -252,6 +287,7 @@ _last_list = None        # "what's left?" reads the list we just talked about
 _pending_list = None     # (items, unknown list, best guess) while asking "did you mean ...?"
 _quiet = False           # quiet mode: answers on screen only (emergencies still speak)
 _lookup_at = None        # when "want me to look it up?" was offered (the offer expires)
+_pending_auth = None   # fix 34: a PIN or "are you sure?" question waiting for its answer
 
 
 def offer_lookup(text):
@@ -261,7 +297,7 @@ def offer_lookup(text):
 
 _offline_mode = False    # offline mode: nothing but this device's own services can be reached
 _mic_muted = False       # muted from the screen: the microphone isn't even opened
-_mic_ok = True           # is the microphone there? (the mute switch cuts its power)
+_mic_ok = True           # is the microphone there? (it can be unplugged)
 MIC_OFF = "mic_off"      # what listen() returns while the microphone is off
 GUEST_MINUTES = 10
 
@@ -278,16 +314,22 @@ def _guarded_request(self, method, url, *args, **kwargs):
 requests.Session.request = _guarded_request
 
 
+def mic_off():
+    """Muted from the screen / by voice, or by the physical mute switch (which always wins)."""
+    return _mic_muted or hardware.switch_muted()
+
+
 def handle_actions(memory):
-    """Buttons pressed on the touch screen: quiet mode, offline mode, mic mute, close a card."""
-    global _quiet, _offline_mode, _mic_muted
+    """Buttons pressed on the touch screen (quiet mode, offline mode, mic mute, close a card),
+    and the physical mute switch."""
+    global _quiet, _offline_mode, _mic_muted, _pending_auth
     while not dashboard.ACTIONS.empty():
         action = dashboard.ACTIONS.get()
         if action == "toggle_quiet":
             _quiet = not _quiet
             memory.set_setting("quiet_mode", "on" if _quiet else "off")
             print(f"👆 Screen: quiet mode {'on' if _quiet else 'off'}")
-        elif action == "toggle_offline":
+        elif action == "toggle_offline" and not kidmode.on(memory):   # fix 76
             _offline_mode = not _offline_mode
             memory.set_setting("offline_mode", "on" if _offline_mode else "off")
             print("👆 Screen: offline mode " + ("on: nothing leaves this device" if _offline_mode else "off"))
@@ -295,6 +337,13 @@ def handle_actions(memory):
             _mic_muted = not _mic_muted
             memory.set_setting("mic_muted", "on" if _mic_muted else "off")
             print("👆 Screen: microphone " + ("muted (it isn't even opened)" if _mic_muted else "on"))
+            if hardware.switch_muted():
+                print("   (the mute switch is still on: the microphone stays off until it's flipped back)")
+        elif action == "mic_switch":
+            if not hardware.switch_muted():
+                _mic_muted = False                      # flipping the switch back on means "listen again"
+                memory.set_setting("mic_muted", "off")
+            print("🔘 Mute switch: microphone " + ("OFF (it isn't even opened)" if mic_off() else "on"))
         elif action == "close_screen":                   # the ✕ on the device screen: close the app
             print("👆 Screen: ✕ tapped, closing the screen and stopping Jarvis")
             stop = os.path.expanduser("~/jarvis_stop.sh")
@@ -302,7 +351,33 @@ def handle_actions(memory):
                 subprocess.Popen(["bash", stop], start_new_session=True)
             else:
                 subprocess.Popen(["pkill", "chromium"], start_new_session=True)
+        elif action.startswith("pin_"):                  # fix 35: a PIN typed on the touch screen
+            job, _pending_auth = _pending_auth, None
+            dashboard.update(activity=None)
+            typed = _pin_hash(action[4:])
+            saved = memory.get_setting("pin_hash")
+            if not job or time.time() - job["at"] > 120:
+                say("That request has expired. Please ask again.", "🔐 security (on device)", tone="gentle")
+            elif job["action"] == "newpin_set":             # fix 36: the new PIN
+                memory.set_setting("pin_hash", typed)
+                print("🔐 PIN changed (only its hash is stored)")
+                say("Your new PIN is saved.", "🔐 PIN changed (only a hash is stored)", tone="bright")
+            elif not saved:
+                memory.set_setting("pin_hash", typed)    # the first PIN ever typed becomes the PIN
+                print("🔐 New PIN saved (only its hash)")
+                globals()["_auth_ok"] = {**job, "new_pin": True}
+            elif typed == saved:
+                if job["action"] == "newpin_check":          # fix 36: right current PIN -> ask for the new one
+                    ask_pin("newpin_set", None, memory)
+                else:
+                    globals()["_auth_ok"] = job
+            else:
+                print("🔐 Wrong PIN")
+                say("That PIN didn't match, so I haven't changed anything.", "🔐 security (on device)", tone="gentle")
         elif action == "stop_activity":                 # ✕ on any card: game, exercise, focus, QR
+            if _pending_auth:                             # fix 35: ✕ on the PIN pad
+                _pending_auth = None
+                say("Okay, I haven't changed anything.", "🔐 security (on device)", tone="gentle")
             dashboard.update(activity=None)
             stop_sharing()
             if getattr(dashboard, "STOP", None) is not None:
@@ -333,11 +408,29 @@ def handle_actions(memory):
                 if act_:
                     dashboard.update(activity=act_["screen"])
                     say(act_["say"], "🎮 game (touch)", tone="bright")
+        elif action.startswith("rlog_"):                 # fix 59: a tap on a reminder that rang today
+            said = todo.toggle_log(int(action[5:]))
+            if said:
+                dashboard.update(activity=todo.card(memory))
+                say(said, "📋 to-do (touch)", tone="bright")
+        elif action.startswith("todo_"):                 # fix 52: a tap on a task in the Today card
+            said = todo.toggle(memory, int(action[5:]))
+            if said:
+                dashboard.update(activity=todo.card(memory))
+                say(said, "📋 to-do (touch)", tone="bright")
+        elif action == "env_check":                      # fix 57: time to look for severe weather
+            if not (_guest or _offline_mode or is_focusing() or meeting_active()):
+                _wd = envcare.warning_due(memory)
+                if _wd:
+                    ding()
+                    dashboard.update(activity=_wd["card"])
+                    say(_wd["say"], "⚠️ weather warning (forecast)", tone="gentle")
         elif action == "close_card":
             dashboard.update(activity=None, emergency=None)
             stop_sharing()
             print("👆 Screen: card closed (any share link is closed too)")
-        dashboard.update(quiet=_quiet, offline_mode=_offline_mode, mic_muted=_mic_muted)
+        dashboard.update(kid_mode=kidmode.on(memory), quiet=_quiet, offline_mode=_offline_mode, mic_muted=mic_off(),
+                         mic_switch=hardware.switch_muted())
 
 
 WHO_TALKING = re.compile(
@@ -387,27 +480,56 @@ SEVERE = re.compile(r"\b(?:chest pain|can'?t breathe|cannot breathe|trouble brea
 # ---------- Output ----------
 def speak(text, tone="calm"):
     """Speak aloud, unless quiet mode is on (then the screen shows it instead)."""
-    if not _quiet:
-        _tts_speak(text, tone)
+    if not _quiet and not phone.silent():          # fix 83
+        (hindi.speak if hindi.on() else _tts_speak)(text, tone)   # fix 97: the Hindi voice in Hindi mode
 
 
 def say(text, route, confidence=None, tone="calm"):
     """Speak a reply (with any pending greeting in front) and show it on the dashboard."""
     global _greeting, _turn_start, _last_said
     text = (_greeting + " " + text).strip()
-    _last_said = text
+    if memfix.NOTE:                                  # fix 70: "...I've replaced the old one: it was 4 May."
+        text, memfix.NOTE = (text + " " + memfix.NOTE).strip(), ""
+    _last_said = text                                # fix 97: always the English (the checks read it)
+    _shown = hindi.to_hindi(text) if hindi.on() else text      # fix 97: in Hindi mode, show and say it in Hindi
+    phone.on_reply(_shown, route)                     # fix 83, 84: tagged on-device / online
     _greeting = ""
     on_screen_only = _quiet and not route.startswith("🚨")     # emergencies are always spoken
-    print(f"🔇 Jarvis (on screen): {text}" if on_screen_only else f"🔊 Jarvis: {text}")
+    print(f"🔇 Jarvis (on screen): {_shown}" if on_screen_only else
+          f"📱 Jarvis (on your phone, not spoken): {_shown}" if phone.silent() else f"🔊 Jarvis: {_shown}")   # fix 87
+    _log_turn = None
     if _turn_start:
         print(f"   ⏱️ reply after {time.time() - _turn_start:.1f}s")
+        _log_turn = (round(time.time() - _turn_start, 2), route)          # fix 58: timing log
         _turn_start = None
-    dashboard.update(status="speaking", last_reply=text, route=route, confidence=confidence,
-                     tone=tone, quiet=_quiet, reply_at=time.time())
+    dashboard.update(status="speaking", last_reply=_shown, route=route + (" · हिंदी" if hindi.on() else ""),
+                     confidence=confidence, tone=tone, quiet=_quiet, reply_at=time.time(),   # fix 97
+                     lang="hi" if hindi.on() else "en")                                      # fix 102
+    _ttsmod.LAST_SYNTH = 0.0
+    _rest = text
+    if _SPOKEN_PREFIX and text.startswith(_SPOKEN_PREFIX):   # fix 64: the first part was already spoken
+        _rest = text[len(_SPOKEN_PREFIX):].strip()
+    _set_spoken("")
     if _quiet and route.startswith("🚨"):
-        _tts_speak(text, tone)                     # emergencies always speak, even in quiet mode
-    else:
-        speak(text, tone)
+        (hindi.speak if hindi.on() else _tts_speak)(text, tone)   # emergencies always speak, even in quiet mode
+    elif _rest:
+        speak(_rest, tone)
+    if _log_turn and "--fast" not in sys.argv:                          # fix 58: jarvis_timing.csv
+        kind = ("ai" if route.startswith(("🧠", "📚", "🤔", "🛡️")) else "online" if route.startswith(("🌐", "🌿", "⚠️"))
+                else "code")
+        row = [time.strftime("%Y-%m-%d %H:%M:%S"), kind, route.split(" (")[0][:40], _TIMING.get("record_s", ""),
+               _TIMING.get("stt_s", ""), _TIMING.get("llm_s", ""), _log_turn[0], round(_ttsmod.LAST_SYNTH, 2),
+               _TIMING.get("early_s") or round(_log_turn[0] + _ttsmod.LAST_SYNTH, 2), len(text.split())]
+        try:
+            new = not os.path.exists("jarvis_timing.csv")
+            with open("jarvis_timing.csv", "a", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                if new:
+                    w.writerow(["time", "kind", "route", "recorded_s", "speech_to_text_s", "ai_s",
+                                "reply_text_ready_s", "voice_synthesis_s", "until_speaking_s", "reply_words"])
+                w.writerow(row)
+        except OSError:
+            pass
 
 
 EMPATHY_PROMPT = (
@@ -444,6 +566,14 @@ def empathy_line(user_text, earlier=()):
         return None                                            # the checked line from the file is used instead
     return line
 
+
+# Checked ideas, used when the LLM's idea fails a check (or Ollama is slow)
+SPARE_IDEAS = ["stretch for two minutes, reaching up high and then touching your toes",
+               "draw a quick doodle of whatever is closest to you",
+               "write down three things that made you smile this week",
+               "put on a favourite song and dance along",
+               "step outside and count five different sounds you can hear",
+               "tidy one small drawer or shelf"]
 
 IDEA_PROMPT = ("Suggest ONE simple, healthy thing a person can do right now, at home or at their desk, "
                "to beat boredom. Reply with one short sentence, under 15 words. No lists, no questions.")
@@ -485,6 +615,27 @@ def split_items(text):
         if len(part) > 1 and part not in ("um", "uh", "okay", "ok", "so", "like") and part not in items:
             items.append(part)
     return items
+
+
+def tell_story(title, parts):
+    """fix 77: a story read slowly, a sentence at a time, each with its own picture. The ✕ stops it."""
+    if getattr(dashboard, "STOP", None) is not None:
+        dashboard.STOP.clear()
+    scene = "📖"
+    say(f"Here's a story: {title}.", "🧸 kid mode: story (on device)", tone="bright")
+    for part in parts:
+        if getattr(dashboard, "STOP", None) is not None and dashboard.STOP.is_set():
+            dashboard.update(activity=None)
+            return
+        scene = kidmode.scene_for(part, scene)
+        dashboard.update(activity={"title": "🧸 " + title, "scene": scene, "lines": [part]},
+                         last_reply=part, reply_at=time.time(), status="speaking")
+        speak(part, "story")
+    time.sleep(1.0)                                         # fix 78: let the lesson sink in
+    dashboard.update(activity={"title": "🧸 " + title, "scene": "🌟", "lines": ["The end!"]})
+    speak("The end.", "story")
+    time.sleep(0.8)
+    say("Did you like it? Shall I tell you another story, or a riddle?", "🧸 kid mode (on device)", tone="bright")
 
 
 def play_sequence(colours, screen):
@@ -585,7 +736,10 @@ def _run_plan_steps(plan, hear=None):
                 say(ack, "🌿 wellbeing (on device)", tone="gentle")
                 time.sleep(1.5)                            # a breath before the next step
         elif kind == "wait":
-            time.sleep(step[1])
+            if time.sleep is _REAL_SLEEP and getattr(dashboard, "STOP", None) is not None:
+                dashboard.STOP.wait(step[1])               # fix 42: ✕ ends the pause at once
+            else:
+                time.sleep(step[1])
         elif kind == "screen":
             dashboard.update(activity=step[1])
         elif kind == "silent":                             # thought dump: just keep listening
@@ -628,6 +782,75 @@ def rms(frame):
     return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
 
 
+# ---------- Wake word for Bluetooth mics ----------
+# A Bluetooth headset/speaker mic only works in phone-call quality (8 kHz), and openWakeWord can't hear
+# "Hey Jarvis" in that (best score 0.009 on the Mivi Roam 2). Whisper still can, garbled but steadily:
+# "Hi, Jeremy", "Hi, Jaree". So for Bluetooth mics, short bursts of speech go to Whisper instead.
+WAKE_HEARD = re.compile(r"^\W*(?:(?:hey|hi|hay|hai|ay|eh|a|i|okay)\b\W*)?"
+                        r"(?:jarvis|jervis|travis|charvis|j[aeiou]r\w+)\b", re.I)
+
+
+def bluetooth_mic():
+    """Is the default microphone a Bluetooth one? (Pi / PipeWire only; anywhere else: no)"""
+    if "--whisper-wake" in sys.argv:
+        return True
+    try:
+        out = subprocess.run(["wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "bluez" in out
+
+
+class WhisperWake:
+    """Stands in for openWakeWord's model (same reset() / predict()), but listens with Whisper:
+    a short burst of speech followed by a pause is transcribed, and 'hey jarvis'-like words wake Jarvis."""
+    QUIET_TO_END = 0.4          # seconds of quiet after the burst
+    LONGEST = 4.0               # "Hey Jarvis" (+ a short question in one breath); longer talk isn't for me
+
+    def __init__(self):
+        self.stt = SttModel(STT_MODEL, n_threads=STT_THREADS, print_progress=False)   # its own copy: its settings stay its own
+        self.noise = deque(maxlen=50)
+        self.question = None    # "Hey Jarvis, what time is it" in one breath: the audio, answered straight away
+        self.reset()
+
+    def reset(self):
+        self.frames, self.quiet = [], 0.0
+
+    def predict(self, frame):
+        level = rms(frame)
+        self.noise.append(level)
+        speaking = level > max(3 * float(np.median(self.noise)), 300)
+        chunk_sec = CHUNK / SAMPLE_RATE
+        if speaking:
+            self.frames.append(frame)
+            self.quiet = 0.0
+        elif self.frames:
+            self.frames.append(frame)
+            self.quiet += chunk_sec
+        length = len(self.frames) * chunk_sec
+        if self.frames and length - self.quiet > self.LONGEST:
+            self.reset()                                   # someone talking at length: not the wake word
+        if not self.frames or self.quiet < self.QUIET_TO_END:
+            return {WAKE_WORD: 0.0}
+        audio = np.concatenate(self.frames).astype(np.float32) / 32768.0
+        self.reset()
+        if length - self.quiet < 0.3:
+            return {WAKE_WORD: 0.0}                        # a click or a cough
+        audio = np.concatenate([audio, np.zeros(SAMPLE_RATE // 2, np.float32)])
+        text = " ".join(seg.text.strip() for seg in self.stt.transcribe(   # the hint: "Hi, Jeremy" -> "Hi Jarvis"
+            audio, single_segment=True, no_context=True, audio_ctx=300, max_tokens=16,
+            initial_prompt="Hey Jarvis.")).strip()
+        found = WAKE_HEARD.search(text)
+        rest = re.sub(r"[^a-z' ]", " ", text[found.end():].lower()).split() if found else []
+        if len(rest) >= 2 and not set(rest) <= {"hi", "hey", "jarvis"}:
+            self.question = audio                          # the question came in the same breath
+        if "--wake-debug" in sys.argv:
+            print(f"   (whisper wake heard: {text!r} -> {'WAKE' if found else 'no'}"
+                  f"{' + question' if self.question is not None else ''})")
+        return {WAKE_WORD: 1.0 if found else 0.0}
+
+
 def pick_mic():
     """The microphone to use: the default one, or the one whose name contains MIC_DEVICE."""
     if not MIC_DEVICE:
@@ -649,7 +872,11 @@ def _set_mic(ok):
 
 def listen(*args, **kwargs):
     """Like _listen_inner, but if the microphone is missing (mute switch), wait calmly instead of crashing."""
-    if _mic_muted:                                 # muted from the screen: the microphone isn't even opened
+    _pm = phone.next_message()                       # fix 83: something typed on the phone
+    if _pm is not None:
+        _PHONE_TEXT[0] = _pm
+        return np.zeros(int(3 * SAMPLE_RATE), dtype=np.float32)
+    if mic_off():                                  # muted (screen, voice or switch): the mic isn't even opened
         dashboard.update(status="waiting")
         time.sleep(0.5)
         return MIC_OFF
@@ -685,6 +912,8 @@ class MeetingRecorder:
                                 blocksize=CHUNK, device=pick_mic()) as stream:
                 while not self._stop.is_set():
                     frame, _ = stream.read(CHUNK)
+                    if hardware.switch_muted():
+                        raise RuntimeError("the mute switch is on")   # ends the recording like a lost mic
                     frame = frame.flatten()
                     frames.append(frame)
                     if rms(frame) > self.level:
@@ -717,6 +946,8 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
         if follow_up:
             print("\n💬 Still listening, no wake word needed...")
             no_speech_timeout = timeout
+            for _ in range(int(0.5 / chunk_sec)):          # fix 32: skip the speaker's echo (Bluetooth lag)
+                stream.read(CHUNK)
         else:
             wake.reset()
             noise = deque(maxlen=50)    # background loudness over the last ~4 seconds
@@ -726,6 +957,8 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
             zero_run = 0
             while True:
                 frame, _ = stream.read(CHUNK)
+                if hardware.switch_muted():
+                    return MIC_OFF                         # the mute switch: close the microphone now
                 frame = frame.flatten()
                 noise.append(rms(frame))
                 if not dashboard.ACTIONS.empty():
@@ -750,6 +983,10 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
                         or (reminders.due_now() and not is_focusing() and not meeting_active())):
                     return REMINDER_DUE
             ding()
+            question = getattr(wake, "question", None)
+            if question is not None:        # Bluetooth mic: "Hey Jarvis, what time is it" said in one go
+                wake.question = None
+                return question
             for _ in range(3):              # skip the ding itself (~240 ms)
                 stream.read(CHUNK)
             _threshold = max(3 * float(np.median(noise)), 300)
@@ -760,6 +997,8 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
         frames, heard_speech, quiet = [], False, 0.0
         for _ in range(int(max_seconds / chunk_sec)):
             frame, _ = stream.read(CHUNK)
+            if hardware.switch_muted():
+                return MIC_OFF                             # muted mid-sentence: drop what was recorded
             frame = frame.flatten()
             frames.append(frame)
             if not dashboard.ACTIONS.empty():          # a button was tapped: handle it right away (fix 28)
@@ -791,12 +1030,38 @@ def announce_due(reminders):
         lines.append(what)
     if not lines:
         return
+    if kidmode.is_on():                                      # fix 80: a child is using me: no details
+        timer = any(l.startswith("your timer is done") for l in lines)
+        other = any(not l.startswith("your timer is done") for l in lines)
+        ding()
+        say((("Your timer is done. " if timer else "") + ("A grown-up has a reminder." if other else "")).strip(),
+            "⏰ reminder (kid mode)", tone="bright")
+        return
     if len(lines) == 1:
         message = f"Reminder: {lines[0]}."
     else:
         message = f"You have {len(lines)} reminders. " + ". ".join(lines) + "."
     ding()
     say(message, "⏰ reminder (on device)", tone="bright")
+
+
+# Fix 48: which reminders get the banner on the screen
+DEADLINE_WORDS = re.compile(r"\b(?:deadline|submit\w*|submission|due|meeting|interview|exam|test|appointment"
+                            r"|presentation|class|lecture|viva|demo|flight|train|bus|pay|bill|report|call with)\b", re.I)
+
+
+def _push_deadlines(reminders):
+    """Fix 47: the deadline banner. The screen works out 'in 12 min' itself; a guest never sees the text."""
+    now = time.time()
+
+    def worth_a_banner(text, kind):          # fix 48: deadlines and meetings only (everything in quiet mode)
+        return _quiet or (kind == "reminder" and bool(DEADLINE_WORDS.search(text)))
+
+    soon = [{"text": "Timer" if k == "timer" else ("A reminder" if (_guest or kidmode.is_on()) else x), "due": d.timestamp()}
+            for d, x, k in reminders.upcoming() if d.timestamp() - now <= 3600 and worth_a_banner(x, k)][:3]
+    rang = [{"text": "Timer done" if r[1] == "timer" else ("A reminder" if (_guest or kidmode.is_on()) else r[0]), "at": r[2]}
+            for r in reminders.rang_recent(1800) if worth_a_banner(r[0], r[1])]
+    dashboard.update(deadlines={"soon": soon, "rang": rang})
 
 
 def summary_weather(memory):
@@ -812,8 +1077,16 @@ def summary_weather(memory):
     return " ".join(s for s in re.split(r"(?<=\.)\s+", full) if not s.startswith("Today's high"))
 
 
+_PHONE_TEXT = [None]                                 # fix 83
+
+
 def transcribe(stt, audio, memory):
     """Speech to text, hinted with words the user has used themselves (nothing hardcoded)."""
+    if _PHONE_TEXT[0] is not None:                   # fix 83: typed on the phone, nothing to hear
+        _t, _PHONE_TEXT[0] = _PHONE_TEXT[0], None
+        return _t
+    if hindi.on():                                   # fix 97: Hindi mode: Vosk hears Hindi (on device)
+        return hindi.hear(audio)
     words = set()
     for t in memory.all():
         t = re.sub(r"\[date:.*?\]", "", t.split(" (saved on")[0])   # dates are not names
@@ -823,6 +1096,7 @@ def transcribe(stt, audio, memory):
         if value:
             words.add(value)
     words.update(set(memory.list_names()) | set(STARTER_LISTS))   # the user's own list names
+    words.update(hearing.hint_words(memory))                          # fix 88: your open tasks, to-do words
     words.update({ASSISTANT_NAME, "Tic-tac-toe", "Memory sequence", "Mental math",
                   "Quiet mode on", "Quiet mode off", "Meeting mode on", "Meeting mode off",
                   "QR code", "Close the QR code", "grocery list",
@@ -915,7 +1189,8 @@ def watch_network():
     """Every 5 seconds, update the online/offline icon (in the background)."""
     def _loop():
         last, had_route, os_ok, checked = None, True, None, 0.0
-        while True:
+        pause = threading.Event()                         # not time.sleep: text_mode --fast turns that off, and
+        while True:                                       # this loop would then spin and starve the LLM on the Pi
             route = network_up()
             if route and not had_route:                   # just reconnected: check again straight away
                 LAST_CALL["failed"], checked = 0.0, 0.0
@@ -930,7 +1205,7 @@ def watch_network():
                 print("🌐 Network is up." if up else "✈️ Offline: everything on the device still works.")
                 dashboard.update(online=up)
                 last = up
-            time.sleep(2)
+            pause.wait(2)
     threading.Thread(target=_loop, daemon=True).start()
 
 
@@ -995,9 +1270,129 @@ def think(messages):
     load_s = data.get("load_duration", 0) / 1e9
     print(f"   (LLM read {read_n} tokens in {read_s:.1f}s, wrote {write_n} in {write_s:.1f}s"
           + (f", model load {load_s:.1f}s" if load_s > 0.5 else "") + ")")
+    _TIMING["llm_s"] = round(_TIMING.get("llm_s", 0) + read_s + write_s + load_s, 2)   # fix 58
     lps = data.get("logprobs") or []
     confidence = math.exp(sum(t["logprob"] for t in lps) / len(lps)) if lps else 1.0
     return reply, confidence
+
+
+# ----- fix 64: faster AI answers. The first sentence is spoken while the AI is still writing the rest -----
+_STREAM_OK = True          # turned off for good if this Ollama doesn't send token probabilities while streaming
+_SPOKEN_PREFIX = ""        # what was already spoken early; say() speaks only the rest
+
+
+def think_early(messages, check=None):
+    """Like think(), but streams. check(sentence, confidence) -> True means: speak this first part now.
+    Returns (reply, confidence, spoken_early)."""
+    global _STREAM_OK
+    if hindi.on():                     # fix 97: in Hindi the whole reply is translated first, never half spoken
+        check = None
+    if not _STREAM_OK or check is None:
+        r, c = think(messages)
+        return r, c, ""
+    import queue as _q, threading as _th
+    got = _q.Queue()
+
+    def _read():
+        try:
+            with requests.post(OLLAMA_URL, json={
+                    "model": LLM_MODEL, "messages": messages, "stream": True, "keep_alive": "24h", "logprobs": True,
+                    "options": {"temperature": 0, "num_predict": 45, "num_ctx": NUM_CTX}},
+                    stream=True, timeout=120) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if line:
+                        got.put(json.loads(line))
+        except Exception as e:                                   # any problem: the normal way, below
+            got.put(e)
+        got.put(None)
+
+    _th.Thread(target=_read, daemon=True).start()
+    text, lps, last, spoken, decided = "", [], {}, "", False
+    while True:
+        part = got.get()
+        if part is None:
+            break
+        if isinstance(part, Exception):
+            if spoken:                                           # already said something: finish without it
+                print("⚠️ AI stream stopped:", part)
+                break
+            r, c = think(messages)
+            return r, c, ""
+        last = part
+        text += (part.get("message") or {}).get("content") or ""
+        lps += part.get("logprobs") or []
+        if decided or part.get("done"):
+            continue
+        body = text.lstrip()
+        if "\n" in body or len(body) > 220:                       # a list or a long first part: wait for all
+            decided = True
+            continue
+        for m in re.finditer(r"[.!?](?=\s)", body):
+            first = body[:m.end()]
+            if len(first.split()) < 4:                            # "Dr." / "Sure!": wait for more
+                continue
+            decided = True
+            if not lps:                                           # no probabilities: can't judge, so never early
+                break
+            conf = math.exp(sum(t["logprob"] for t in lps) / len(lps))
+            if check(first, conf):
+                print(f"   (spoke early, confidence {conf:.2f}: {first})")
+                dashboard.update(status="speaking", last_reply=first, reply_at=time.time())
+                if _turn_start:
+                    _TIMING["early_s"] = round(time.time() - _turn_start, 2)
+                speak(first)
+                spoken = first
+            break
+    reply = text.strip()
+    data = last if isinstance(last, dict) else {}
+    read_n, write_n = data.get("prompt_eval_count", 0), data.get("eval_count", 0)
+    read_s, write_s = data.get("prompt_eval_duration", 0) / 1e9, data.get("eval_duration", 0) / 1e9
+    load_s = data.get("load_duration", 0) / 1e9
+    print(f"   (LLM read {read_n} tokens in {read_s:.1f}s, wrote {write_n} in {write_s:.1f}s, streamed"
+          + (f", model load {load_s:.1f}s" if load_s > 0.5 else "") + ")")
+    _TIMING["llm_s"] = round(_TIMING.get("llm_s", 0) + read_s + write_s + load_s, 2)
+    if not lps:                                                   # can't measure confidence this way: never again
+        _STREAM_OK = False
+        print("   (this Ollama sends no token probabilities while streaming: early speaking turned off)")
+        if not spoken:
+            r, c = think(messages)
+            return r, c, ""
+        return reply, 0.0, spoken                                 # 0.0 = treat as unsure
+    return reply, math.exp(sum(t["logprob"] for t in lps) / len(lps)), spoken
+
+
+_EARLY_NO = re.compile(
+    r"computer program|emotions|as an ai|language model|\b(?:just|only) an? (?:\w+ )?(?:ai|bot|assistant|program)\b"
+    r"|^(?:if you (?:have|need) any|feel free to|is there anything|how can i|let me know|what can i)"
+    r"|don'?t (?:know|have)|not sure|no access|access\b"
+    r"|weather|sky\b|breeze|degrees|sunny|raining|cloudy"
+    r"|\b(?:i'll|i will|i've|i have|let me|i can|sure,? i'?ll)\b"
+    r"|\b(?:added|removed|saved|scheduled|noted|closed|cleared|deleted|created|shared|sent|corrected|changed"
+    r"|updated|fixed|moved|modified|edited|rescheduled|replaced|reminded?|set)\b"
+    r"|https?:|[*#`]|^\s*[-\d]")
+
+
+def early_check(first, conf, text, history):
+    """May this first sentence be spoken before the rest is written? Only if every later check would keep it."""
+    s = first.strip().lower()
+    if _EARLY_NO.search(s) or hearing.FAKE_ACTION.search(s) or hearing.REFUSAL.match(s):   # fix 88
+        return False
+    said_before = {x.strip().lower() for m in history[-8:] if m["role"] == "assistant"
+                   for x in re.split(r"(?<=[.!?])\s+", m["content"])}
+    if s in said_before:
+        return False
+    low = text.lower()
+    is_q = re.match(r"(what|who|when|where|which|why|how (?:many|much|old|far|long|big)|is|are|was|were|does|did)\b", low)
+    about_me = re.search(r"\b(you|your|yourself)\b", low)
+    if is_q and not about_me:
+        return conf >= 0.92                                       # facts: only when the AI is very sure
+    return conf >= 0.75
+
+
+def _set_spoken(prefix):
+    global _SPOKEN_PREFIX
+    _SPOKEN_PREFIX = prefix
 
 
 # ---------- Text helpers ----------
@@ -1041,7 +1436,8 @@ def fix_command_word(text):
     if not words:
         return text
     first = words[0].lower().strip(",.!?")
-    if first in COMMAND_WORDS:
+    if first in COMMAND_WORDS or first in ("move", "moved", "change", "snooze", "edit", "push",
+                                          "update", "shift", "delay"):   # fix 47: real command words
         return text
     best = max(COMMAND_WORDS, key=lambda w: SequenceMatcher(None, first, w).ratio())
     if SequenceMatcher(None, first, best).ratio() >= 0.8:
@@ -1140,18 +1536,163 @@ RELATIONS = r"(friend|sister|brother|mother|mom|father|dad|cousin|colleague|wife
 PERSON = re.compile(
     rf"\b(?:this is|meet) my {RELATIONS}[,]?\s+([a-z]+)"
     rf"|\bmy {RELATIONS}'?s? name is\s+([a-z]+)")
+# fix 87: words that come after "meet my mother" but are not a name ("meet my mother, say hi to her")
+NOT_A_NAME = {"say", "said", "says", "hi", "hello", "hey", "she", "he", "her", "him", "his", "is", "was", "and", "but",
+              "who", "please", "also", "here", "there", "today", "now", "too", "so", "will", "would", "can", "could",
+              "come", "came", "go", "going", "the", "a", "an", "to", "jarvis", "everyone", "everybody", "again", "just",
+              "really", "very", "then", "tell", "greet", "wave", "it", "its", "this", "that", "from", "with", "at", "in",
+              "on", "yes", "no", "ok", "okay", "right", "sir", "ji", "my", "your", "be", "do", "not", "she's", "he's"}
+
+
+# ---------- Fix 35: PIN on the touch screen ----------
+_auth_ok = None          # the PIN was right: main() carries out this job
+
+
+def _pin_hash(pin):
+    import hashlib
+    return hashlib.sha256(("jarvis-pin:" + pin).encode()).hexdigest()   # only the hash is ever stored
+
+
+def ask_pin(action, value, memory):
+    """Show the PIN pad. Used only for 'forget everything', changing a saved name, and changing the PIN."""
+    global _pending_auth
+    first = not memory.get_setting("pin_hash")
+    if first and _guest:                                  # fix 36: a guest can never create the PIN
+        say(f"Only {memory.get_setting('user_name') or 'my owner'} can set up my PIN.",
+            "🔐 guest mode: not allowed", tone="gentle")
+        return
+    _pending_auth = {"action": action, "value": value, "at": time.time()}
+    if action == "newpin_check":
+        title, lines = "Type your current PIN", ["To change your PIN", "4 to 8 digits, then ✓"]
+        speech = "To change your PIN, first type your current PIN on my screen."
+    elif action == "newpin_set":
+        title, lines = ("Create a PIN" if first else "Type your new PIN"), ["4 to 8 digits, then ✓"]
+        speech = "Please create a PIN on my screen." if first else "Now type your new PIN on my screen."
+    else:
+        what = ("erase everything" if action == "wipe" else "turn off kid mode" if action == "kidoff"
+                else "turn on kid mode" if action == "kidon" else "delete that note" if action == "delnote"   # fix 82
+                else f"change your name to {value}")   # fix 76
+        title, lines = ("Create a PIN" if first else "Type your PIN"), [f"To {what}", "4 to 8 digits, then ✓"]
+        speech = (f"To {what}, first create a PIN on my screen. I'll ask for it from now on." if first
+                  else f"To {what}, please type your PIN on my screen.")
+    dashboard.update(activity={"title": "🔐 " + title, "lines": lines,
+                               "pinpad": True, "pin_id": time.time(), "expires": time.time() + 120})
+    say(speech, "🔐 security check", tone="gentle")
 
 
 def handle_command(text, memory, history, reminders):
     """Handle reminder / list / people / voice / identity / city / remember / forget commands.
     Returns True if handled."""
-    global _pending_list          # 'did you mean your grocery list?' state
-    global _expect_city, _quiet, _offline_mode, _mic_muted
+    global _expect_city, _quiet, _offline_mode, _mic_muted, _pending_list
     lower = text.lower().strip(" .!?,")
+
+    # ----- Fix 51: "good morning" / "is it morning?" answered from the clock, never guessed -----
+    _hr = time.localtime().tm_hour
+    _part = ("night" if _hr < 5 or _hr >= 22 else "morning" if _hr < 12 else "afternoon" if _hr < 17 else "evening")
+    _clock = time.strftime("%I:%M %p").lstrip("0")
+    _who = (_guest[0] if _guest else memory.get_setting("user_name")) or ""
+    m_g = re.match(r"^(?:(?:hi|hello|hey|oh|okay|ok)[, ]+)?(?:jarvis[, ]+)?good (morning|afternoon|evening)"
+                   r"(?:[, ]+jarvis)?$", lower)
+    if m_g:
+        if m_g.group(1) == _part:
+            say(f"Good {_part}{', ' + _who if _who else ''}! How are you?", "👋 greeting (clock)", tone="bright")
+        else:
+            say(f"Good {'evening' if _part == 'night' else _part}{', ' + _who if _who else ''}! "
+                f"It's actually {_clock}.", "👋 greeting (clock)", tone="bright")
+        return True
+    m_q = re.search(r"\b(?:is it|it is|is this|are we in the)\s+(?:really |actually |still |now |already )?(?:a |the )?"
+                    r"(morning|afternoon|evening|night)\b(?!\s+(?:walk|run|routine|news|show|brief|class|shift))", lower)
+    if m_q and ("?" in text or re.match(r"(?:is|are)\b", lower) or re.search(r"\breally\b", lower)):
+        asked = m_q.group(1)
+        if asked == _part:
+            say(f"Yes, it's {_part}. It's {_clock}.", "🕐 time of day (clock)")
+        else:
+            say(f"No, it's {_part} now. It's {_clock}.", "🕐 time of day (clock)")
+        return True
+
+    # ----- Fix 62: calculator and unit converter (plain Python: exact, instant, offline) -----
+    _rt = getattr(reminders, "touched", None)                          # a reminder changed after the sum:
+    _cx = calc.handle(text, edits_ok=not (_rt and calc.LAST and _rt[1] > calc.LAST["t"]))   # "make it 6" is the reminder's
+    if _cx:
+        say(_cx, "🧮 calculator (on device)")
+        return True
+
+    # ----- Fix 70: correct, update or forget one saved fact; "undo" puts it back -----
+    _mf = None if _guest else memfix.handle(text, memory, is_unsafe)
+    if _mf:
+        say(_mf, "💾 memory updated (on device)")
+        return True
+
+    # ----- Fix 75: offline dictionary -----
+    _dict = dictionary.handle(text)
+    if _dict:
+        say(_dict, "📖 dictionary (on device)")
+        return True
+
+    # ----- Fix 83: phone access (your own Wi-Fi only, PIN, 8 hours at most) -----
+    if re.search(r"\b(?:connect|pair|link)\b.*\bphone\b|\bphone access(?: on)?$|\buse (?:you|jarvis) (?:from|on) my phone\b",
+                 lower) and not re.search(r"\b(?:disconnect|unpair|off)\b|\bis (?:my )?phone\b", lower):
+        if _guest or kidmode.on(memory):
+            say("Only the owner can connect a phone.", "🔐 not allowed", tone="gentle")
+            return True
+        if not memory.get_setting("pin_hash"):
+            say("First, set up a PIN. Say: change my PIN. Your phone will ask for it.", "📱 phone access")
+            return True
+        from share import lan_ip
+        ip = lan_ip()
+        if not ip:
+            say("I need to be on Wi-Fi to connect your phone. It only works over your own Wi-Fi, never the internet.",
+                "📱 phone access (no network)")
+            return True
+        _h = memory.get_setting("pin_hash")
+        phone.start(check_pin=lambda p, h=_h: _pin_hash(p) == h, wake=lambda: dashboard.ACTIONS.put("phone_msg"),
+                    notify=lambda: dashboard.update(activity=None))
+        url = phone.pair_link(ip)
+        print(f"📱 Phone access link (Wi-Fi only, once, 3 minutes): {url}")
+        print(f"   No camera? On any device on this Wi-Fi open {phone.LAST['url']} and type {phone.LAST['code']}")
+        dashboard.update(activity={"title": "📱 Connect your phone", "qr": phone.qr_svg(url), "expires": time.time() + 180,
+                                   "lines": ["Scan with your phone (same Wi-Fi)",
+                                             f"No camera? Open {phone.LAST['url']} and type {phone.LAST['code']}",
+                                             "Then type your PIN there. Works once, for 3 minutes"]})
+        say("Scan the code on my screen with your phone, then type your PIN there. It only works on your own Wi-Fi.",
+            "📱 phone access (Wi-Fi only)")
+        return True
+    if re.search(r"\b(?:disconnect|unpair|log out|logout|sign out)\b.*\bphones?\b|\bphone access off\b", lower):
+        n = phone.disconnect()
+        say(f"Done. {'Your phone is' if n == 1 else f'{n} phones are' if n else 'No phone was'} disconnected"
+            + (", and the chat on it is cleared." if n else "."), "📱 phone access")
+        return True
+    if re.search(r"\bis (?:my |a |any )?phone connected\b|\bany phones? connected\b", lower):
+        say("Yes, a phone is connected. Say: disconnect my phone, to log it out." if phone.connected()
+            else "No phone is connected.", "📱 phone access")
+        return True
+
+    # ----- Fix 81: "is my memory encrypted?" -----
+    if re.search(r"\b(?:is|are)\s+(?:my|your|the)\s+(?:memory|memories|data|information|info)\s+(?:encrypted|safe|secure|protected|private)\b|\bhow (?:is|do you (?:keep|store|protect)) my (?:data|memory|information)", lower):
+        say(securedb.answer() if securedb else "My memory isn't encrypted yet.", "🔒 security (on device)")
+        return True
+
+    # ----- Fix 35: a PIN typed on the touch screen, only for "forget everything" and changing your name -----
+    global _pending_auth
+    if lower.startswith(("forget everything", "delete everything", "erase everything")):
+        if _guest:
+            say(f"Only {memory.get_setting('user_name') or 'my owner'} can erase my memory.",
+                "🔐 guest mode: not allowed", tone="gentle")
+            return True
+        ask_pin("wipe", None, memory)
+        return True
+    if re.match(r"(?:please\s+)?(?:change|reset|update|set(?: up)?|create|make)(?: a| my| the)?(?: new)?"
+                r" (?:pin|pen)(?: code| number)?\b", lower):        # fix 36: change the PIN on the screen
+        if _guest:
+            say("Only the owner can change my PIN.", "🔐 guest mode: not allowed", tone="gentle")
+            return True
+        ask_pin("newpin_check" if memory.get_setting("pin_hash") else "newpin_set", None, memory)
+        return True
     # Closing the QR card: any wording while it's on screen ("close it", "closer QR", "close the viewer", "done")
     qr_on_screen = bool((dashboard.STATE.get("activity") or {}).get("qr"))
     asks_close = re.search(r"\b(?:clos\w*|hide|remove|dismiss|take (?:it )?(?:away|off)|get rid of|go away)\b", lower)
-    if dashboard.STATE.get("emergency") and asks_close and not qr_on_screen:
+    if dashboard.STATE.get("emergency") and asks_close and not qr_on_screen \
+            and not re.search(r"\bfrom (?:my |the )?[a-z -]*list\b|\bto-?\s?do\b|\btasks?\b", lower):   # fix 52: a list sentence
         dashboard.update(emergency=None)
         say("Okay, I've cleared the screen. I'm still here if you need help.", "🚨 banner closed")
         return True
@@ -1164,14 +1705,24 @@ def handle_command(text, memory, history, reminders):
     if not qr_on_screen and asks_close and re.search(r"\b(?:q\s?r|code|viewer)\b", lower):
         say("There's no code on my screen right now.", "📤 share (on device)")
         return True
+    # Fix 43: "close it" / "stop journaling": closes any card on the screen, like the ✕
+    if dashboard.STATE.get("activity") and not qr_on_screen and re.fullmatch(
+            r"(?:please\s+|ok(?:ay)?,?\s+)?(?:close|hide|dismiss|stop|end)(?: it| this| that| the (?:card|screen|window"
+            r"|list|journal\w*|exercise|game|focus|prompt))?(?: now| please)?|stop (?:the )?journal\w*", lower):
+        dashboard.update(activity=None)
+        if getattr(dashboard, "STOP", None) is not None:
+            dashboard.STOP.set()
+        dashboard.ACTIONS.put("stop_activity")           # the same clean-up as the ✕ on the card
+        say("Okay, closed.", "🖐️ closed by voice")
+        return True
     if re.search(r"\b(?:turn|switch|shut)\s+off\s+(?:the\s+|your\s+|my\s+)?(?:mic|mike|microphone)\b"
                  r"|^(?:the\s+)?(?:mic|mike|microphone)\s+off$", lower):
         lower = "mute the mic"                            # handled by "mute the mic" just below
     # "Is the mic on?" / "is Mike on or off?": the real state, never a guess
     if re.search(r"\b(?:mic|mike|microphone)\b", lower) and re.search(r"\b(?:on|off|working|status|listening)\b", lower) \
             and not re.search(r"\bmute\b", lower):
-        say("My microphone is on, and I'm listening. Tap the mic button on my screen, or say mute the mic, "
-            "to turn it off.", "🎙️ mic (real state)")
+        say("My microphone is on, and I'm listening. Flip my mute switch, tap the mic button on my screen, "
+            "or say mute the mic, to turn it off.", "🎙️ mic (real state)")
         return True
     # Offline mode by voice: no weather, news or look-ups at all; everything else still works
     m = re.search(r"\b(?:offline|airplane) mode (on|off)\b|\b(?:turn|switch) (on|off) (?:the )?(?:offline|airplane) mode\b",
@@ -1210,13 +1761,34 @@ def handle_command(text, memory, history, reminders):
         memory.set_setting("quiet_mode", "on")
         say("Quiet mode on. I'll answer on the screen. Emergencies will still be spoken.", "🔇 quiet mode on")
         return True
+    _ep = envcare.handle_pending(text, reminders)                  # fix 57: "want me to move it?"
+    if _ep:
+        say(_ep, "🌿 smart reminder (on device)")
+        return True
+    # ----- Fix 52: to-do list, the Today card, "when am I free?" -----
+    if not _guest:
+        _td = todo.handle_todo(text, memory, reminders)
+        if _td:
+            if _td["card"] or (dashboard.STATE.get("activity") or {}).get("today"):
+                dashboard.update(activity=todo.card(memory, reminders))
+            say(_td["say"], "📋 to-do (on device)")
+            return True
     # "set a reminder for 7 pm to call papa" -> "remind me at 7 pm to call papa"
     m = re.match(r"^(?:please\s+)?(?:set|add|create) (?:a )?reminder (?:for|at) (.+?) to (.+)$", lower)
     if m:
         text = f"remind me at {m.group(1)} to {m.group(2)}"
 
+    text = remindai.rewrite(text)                                      # fix 93: "ping me around half past six"
     reminder_reply = handle_reminder_command(text, reminders)
     if reminder_reply:
+        _rc = reminders.recent(5)                                       # fix 52: clash warning
+        if _rc and reminder_reply.startswith(("Okay, I'll remind you", "Done.")):
+            _note = todo.clash_note(memory, reminders, datetime.fromtimestamp(_rc[2]), _rc[1], skip_text=_rc[1])
+            if _note:
+                reminder_reply += " " + _note
+            _sg = None if (_offline_mode or _guest) else envcare.reminder_suggestion(memory, reminders, _rc)
+            if _sg:                                                    # fix 57: smart reminder
+                reminder_reply += " " + _sg
         say(reminder_reply, "⏰ reminders (on device)")
         return True
 
@@ -1361,7 +1933,9 @@ def handle_command(text, memory, history, reminders):
         return True
     # "change apples to 5" / "set eggs to 12" / "increase apples to 5": the number is set, not added
     m = re.match(rf"^(?:please\s+)?(?:can you\s+)?(?:change|set|make|update|increase|decrease|reduce)\s+(?:the\s+)?"
-                 rf"(?:number of\s+|quantity of\s+|count of\s+)?(.+?)\s+to\s+{_N}(?:\s+.*)?$", lower)
+                 rf"(?:number of\s+|quantity of\s+|count of\s+)?(.+?)\s+to\s+{_N}(?:\s+(.*))?$", lower)
+    if m and m.group(3) and not set(m.group(3).split()) <= set(m.group(1).split()) | {"of", "more", "please"}:
+        m = None                                   # fix 72: extra words that aren't the item: "2 litres of milk"
     if m:
         qty_, thing_ = split_qty(f"{m.group(2)} {m.group(1)}")
         thing_ = re.sub(r"\s+(?:on|in)\s+(?:my\s+|the\s+)?[a-z ]*list$", "", thing_)
@@ -1529,7 +2103,7 @@ def handle_command(text, memory, history, reminders):
    
 
     # "How many eggs do I have?" / "how many eggs are on my grocery list?": counted from the list, never added
-    m = re.search(r"\bhow many ([a-z]+(?: [a-z]+)?) (?:do i (?:have|need)|are (?:there|on|in|left)|is (?:there|on|in)"
+    m = re.search(r"\bhow many ([a-z]+(?: (?!(?:are|is|do|have)\b)[a-z]+)?) (?:do i (?:have|need)|are (?:there|on|in|left)|is (?:there|on|in)"
                   r"|have i got|left|on my|in my)\b", lower)
     if m:
         target = next((list_name(w) for w in re.findall(r"[a-z]+", lower) if list_name(w) in known_lists), None) \
@@ -1551,6 +2125,11 @@ def handle_command(text, memory, history, reminders):
         name = list_name(m.group(1) or m.group(2)) if m else _last_list
         _last_list = name
         items = memory.list_get(name)
+        if not items and name not in {list_name(n) for n in memory.list_names()} | set(STARTER_LISTS):   # fix 88
+            _have = sorted({list_name(n) for n in memory.list_names()} | {"to-do"})
+            say(f"You don't have a {name} list. Your lists are: {', '.join(_have[:-1])} and {_have[-1]}. "
+                "Which one did you mean?", "📝 lists (on device)")
+            return True
         if not items:
             say(f"Your {name} list is empty.", "📝 lists (on device)")
             return True
@@ -1564,6 +2143,10 @@ def handle_command(text, memory, history, reminders):
 
     list_reply = handle_list_command(text, memory)
     if list_reply:
+        if list_reply.startswith("Added to your schedule"):          # fix 52: schedule clash
+            _note = todo.clash_for_schedule(memory, reminders)
+            if _note:
+                list_reply += " " + _note
         m_last = re.search(r"\byour (\w+) list\b", list_reply.lower())
         if m_last:
             _last_list = list_name(m_last.group(1))       # so "share it" / "the QR for this" knows which list
@@ -1572,12 +2155,29 @@ def handle_command(text, memory, history, reminders):
 
     # ----- People -----
     m = PERSON.search(lower)
+    _neg = re.compile(r"\b(?:not|never|don'?t|won'?t|didn'?t|can'?t|cannot|isn'?t)\b")
+    if m and _neg.search(lower[:m.start()]):
+        m = None        # fix 87: "I'm not going to meet my mother" is not an introduction
+    _intro = m if m and m.group(1) else re.search(rf"\b(?:this is|meet|say hi to|say hello to) my {RELATIONS}\b", lower)
+    if _intro and not _neg.search(lower[:_intro.start()]) and (not m or (m.group(2) or m.group(4)) in NOT_A_NAME):
+        # fix 87: "Meet my mother, say hi to her" -> "say" is not her name: greet, and ask for the name
+        _rel = _intro.group(1)
+        _pron = ("her" if _rel in ("mother", "mom", "sister", "wife") else
+                 "his" if _rel in ("father", "dad", "brother", "husband") else "their")
+        say(f"Hello! It's lovely to meet you. What's {_pron} name? You can say: my {_rel}'s name is, and the name.",
+            "🙂 introduction (on device)", tone="bright")
+        return True
+    if m and (m.group(2) or m.group(4)) in NOT_A_NAME:
+        m = None        # fix 87: "my friend's name is so ..." is not a name
     if m:   # "This is my friend Shubhangi" / "My friend's name is Shubhangi"
         relation = m.group(1) or m.group(3)
         person = (m.group(2) or m.group(4)).title()
         memory.add(f"My {relation}'s name is {person} (saved on {date.today():%A, %d %B %Y})")
         print(f"🙂 Remembered: my {relation} is {person}")
-        say(f"Nice to meet you, {person}! I'll remember that.", "💾 person saved to memory", tone="bright")
+        if m.group(1):                                # "this is my friend Shubhangi": she is here
+            say(f"Nice to meet you, {person}! I'll remember that.", "💾 person saved to memory", tone="bright")
+        else:                                         # fix 97: "my sister's name is Riya": she isn't here
+            say(f"Got it: your {relation} is {person}. I'll remember that.", "💾 person saved to memory")
         return True
 
     m = re.search(rf"\bwho (?:is|are) my {RELATIONS}s?\b|\bmy {RELATIONS}s?'?s? names?\b", lower)
@@ -1606,7 +2206,10 @@ def handle_command(text, memory, history, reminders):
     m = re.search(r"\b(male|female|man|woman|boy|girl)(?:'s)? voice\b", lower)
     if m and re.search(r"\b(use|switch|change|speak|talk|sound)\b", lower):
         kind = "female" if m.group(1) in ("female", "woman", "girl") else "male"
-        set_voice(kind)
+        if not set_voice(kind):                                          # fix 58: honest voice switch
+            say(f"I don't have a {kind} voice installed yet. Its voice file needs to be downloaded first.",
+                "⚙️ voice (not installed)", tone="gentle")
+            return True
         memory.set_setting("voice", kind)
         say(f"Sure! This is my {kind} voice. How do I sound?", "⚙️ voice changed on device", tone="bright")
         return True
@@ -1747,7 +2350,7 @@ def handle_command(text, memory, history, reminders):
                 seen.add(k)
                 uniq.insert(0, c)
             latest = uniq[-6:]
-            say(f"I have {len(uniq)} things saved. " + ("The latest ones: " if len(uniq) > 6 else "")
+            say(f"I have {len(uniq)} thing{'s' if len(uniq) != 1 else ''} saved. " + ("The latest ones: " if len(uniq) > 6 else "")
                 + ". ".join(latest) + ".", "📋 memory list")
         return True
 
@@ -1756,8 +2359,9 @@ def handle_command(text, memory, history, reminders):
 
 # ---------- Main loop ----------
 def main():
-    global _greeting, _pending_name, _guest, _offer_remember, _last_list, _turn_start, _quiet, _lookup_at, _offline_mode, _mic_muted
+    global _greeting, _pending_name, _guest, _offer_remember, _last_list, _turn_start, _quiet, _lookup_at, _offline_mode, _mic_muted, _pending_auth
     dashboard.start()
+    hardware.start()                                 # LEDs + mute switch (simulated when not on the Pi)
     watch_network()
     t0 = time.time()
 
@@ -1766,23 +2370,40 @@ def main():
 
     print("Loading models...")
     prewarm(read_prompt=True)                                        # LLM loads in the background meanwhile
-    try:
-        wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
-    except Exception:
-        openwakeword.utils.download_models()         # only needed the very first time
-        wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
-    step("wake word")
-    stt = SttModel(STT_MODEL, n_threads=STT_THREADS, print_progress=False)
+    if bluetooth_mic():
+        wake = WhisperWake()                         # Bluetooth mics are too muffled for openWakeWord
+        step("wake word (Bluetooth mic: listening with Whisper)")
+    else:
+        try:
+            wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
+        except Exception:
+            openwakeword.utils.download_models()     # only needed the very first time
+            wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
+        step("wake word")
+    stt = SttModel(STT_MODEL, n_threads=4, print_progress=False)
     meeting_stt = None                               # loaded the first time meeting mode starts
     step("speech to text")
     memory = MemoryStore()
     reminders = Reminders()
+    todo.REMINDERS = reminders                         # fix 52
+    envcare.MEMORY = memory                            # fix 57
+    hearing.cleanup(memory)                               # fix 88
+    remindai.URL, remindai.MODEL = OLLAMA_URL, LLM_MODEL  # fix 93: the same on-device AI
+    hindi.start(memory)                                    # fix 97: Hindi was on last time: load it again
+    if "--fast" not in sys.argv:
+        def _env_ticker():                             # fix 57: every 30 minutes, ask the main loop to check
+            tick = threading.Event()                   # (the check itself only runs if warnings are on,
+            tick.wait(60)                              #  and at most every 3 hours)
+            while True:
+                dashboard.ACTIONS.put("env_check")
+                tick.wait(1800)
+        threading.Thread(target=_env_ticker, daemon=True).start()
     set_voice(memory.get_setting("voice") or "male")
     _quiet = memory.get_setting("quiet_mode") == "on"   # remembered across restarts
     dashboard.update(quiet=_quiet)
     _offline_mode = memory.get_setting("offline_mode") == "on"
     _mic_muted = memory.get_setting("mic_muted") == "on"
-    dashboard.update(offline_mode=_offline_mode, mic_muted=_mic_muted)
+    dashboard.update(offline_mode=_offline_mode, mic_muted=mic_off(), mic_switch=hardware.switch_muted())
     step("memory, reminders, voice")
     example_vecs = embed_many([e for e, _ in INTENT_EXAMPLES])
     step("intent gate")
@@ -1790,6 +2411,7 @@ def main():
     last_chat = time.time()
     follow_up = False
     follow_count = 0
+    _misses = 0   # fix 32: noises heard as nothing during a conversation
     chime_next = False
     recorder = None                                  # meeting mode: the non-stop recorder
 
@@ -1799,7 +2421,8 @@ def main():
         if audio is None or isinstance(audio, str):
             return ""
         heard = NOISE_TAGS.sub("", transcribe(stt, audio, memory)).strip()
-        print(f"You: {heard}")
+        heard = hindi.understand(heard).get("text", "")                 # fix 97: a Hindi answer works too
+        print(f"You: {hindi.shown(heard)}")
         help_ = handle_emergency(heard, memory) if heard else None
         if help_:
             dashboard.update(emergency=help_["banner"], activity=None)
@@ -1811,18 +2434,62 @@ def main():
 
     while True:
         handle_actions(memory)
+        if _auth_ok:                                     # fix 35: the PIN on the screen was right
+            job = _auth_ok
+            globals()["_auth_ok"] = None
+            lead = "Your PIN is set. " if job.get("new_pin") else "PIN correct. "
+            if job["action"] == "wipe":
+                count = memory.forget_all()
+                reminders.clear_all()
+                clear_journal()
+                clear_focus_log()
+                clear_cycle_log()
+                clear_session()
+                del history[1:]
+                clear_llm_cache()
+                prewarm(read_prompt=True)
+                print(f"🧹 Erased {count} memories and list items (PIN checked)")
+                say(lead + "I've erased everything I had saved, including my working memory.",
+                    "🧹 everything erased (PIN checked)")
+            elif job["action"] == "delnote":                         # fix 82
+                say(lead + notes.delete(memory, job["value"]), "📝 note deleted (PIN checked)")
+            elif job["action"] in ("kidon", "kidoff"):              # fix 76
+                if job["action"] == "kidon":
+                    memory.set_setting("kid_prev_offline", "on" if _offline_mode else "off")
+                    _offline_mode = True
+                    memory.set_setting("offline_mode", "on")
+                    say(lead + kidmode.turn_on(memory), "🧸 kid mode (PIN set)", tone="bright")
+                else:
+                    _offline_mode = memory.get_setting("kid_prev_offline") == "on"
+                    memory.set_setting("offline_mode", "on" if _offline_mode else "off")
+                    dashboard.update(activity=None)
+                    say(lead + kidmode.turn_off(memory), "🧸 kid mode off (PIN checked)", tone="bright")
+                dashboard.update(kid_mode=kidmode.on(memory), offline_mode=_offline_mode)
+            else:
+                memory.set_setting("user_name", job["value"])
+                say(lead + f"I'll call you {job['value']} from now on.", "🔐 name changed (PIN checked)", tone="bright")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
         plan = focus_tick()                          # focus or break time is up
         if plan:
             ding()
             run_plan(plan, hear)
             follow_up = True
             continue
-        nudge = None if _guest else cycle_nudge_due()       # the discreet period reminder, once per cycle
+        ev = None if (_guest or kidmode.is_on() or "--fast" in sys.argv or is_focusing() or meeting_active()) \
+            else todo.evening_due(memory)                    # fix 52: evening check, once after 8 PM
+        if ev:
+            ding()
+            say(ev, "📋 evening check (on device)", tone="gentle")
+            follow_up = True
+            continue
+        nudge = None if (_guest or kidmode.is_on()) else cycle_nudge_due()       # the discreet period reminder, once per cycle
         if nudge:
             ding()
             say(nudge, "🌸 private reminder (on device)", tone="gentle")
             follow_up = True
             continue
+        _push_deadlines(reminders)   # fix 47: the deadline banner
         if reminders.due_now() and not is_focusing() and not meeting_active():   # wait during focus / meetings
             announce_due(reminders)
             follow_up = True
@@ -1861,6 +2528,13 @@ def main():
                   f"{recorder.pieces.qsize()} waiting)")
             if not heard:
                 continue
+            if hindi.on():                                       # fix 99: a Hindi meeting is understood in English
+                _hm = hindi.understand(heard)
+                print(f"   📝 (meeting, Hindi) {heard}")
+                heard = _hm.get("text", "")
+                if not heard:                                    # a number got lost: better skip than save it wrong
+                    print("   (skipped: the translation lost a number or time)")
+                    continue
             heard = re.sub(r"\bmeeting mode of\b", "meeting mode off", heard, flags=re.I)   # a common mishearing
             print(f"   📝 (meeting) {heard}")
             help_ = handle_emergency(heard, memory)              # emergencies still come first
@@ -1911,9 +2585,21 @@ def main():
 
         dashboard.update(status="thinking")
         _turn_start = time.time()
+        _TIMING.clear()                                                  # fix 58: this turn's timings
+        _TIMING["record_s"] = round(len(audio) / SAMPLE_RATE, 1)
         text = transcribe(stt, audio, memory)
+        _TIMING["stt_s"] = round(time.time() - _turn_start, 2)
+        _hin = hindi.understand(text)                  # fix 97: Hindi (spoken or typed) -> English, checked
+        if _hin.get("say"):
+            print(f"You: {text}")
+            phone.on_heard(text)
+            say(_hin["say"], "🇮🇳 Hindi: say it again (on device)", tone="gentle")
+            follow_up = True
+            continue
+        text = _hin["text"]
         text = NOISE_TAGS.sub("", text).strip()                                   # drop [BLANK_AUDIO], (music), *cough*
         text = re.sub(r"\bto (day|morrow|night)\b", r"to\1", text, flags=re.I)   # "to day" -> "today"
+        text = learn.apply(text, memory)                                         # fix 74: "P rent" -> "pay rent"
         sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
         if len(sentences) >= 3 and len(set(sentences)) == 1:
             print(f"   (ignored repeated phrase, probably background noise: {text})")
@@ -1932,20 +2618,57 @@ def main():
                 and time.time() - (dashboard.STATE.get("reply_at") or 0) < 20:
             print(f"   (ignored my own voice heard back: {text})")
             text = ""
+        if text and not (set(re.findall(r"[a-z0-9']+", text.lower()))
+                         - {"and", "so", "um", "uh", "hmm", "mm", "the", "a", "but", "or", "oh"}):
+            print(f"   (ignored a noise heard as: {text!r})")    # fix 49: "," / ", and," is not a sentence
+            text = ""
         if len(audio) < 2.0 * SAMPLE_RATE and text.lower().strip(" .!?,") in WHISPER_GHOSTS:
             print(f"   (ignored a short noise heard as: {text})")
             text = ""
         if not text:
             print("Didn't catch anything.")
-            follow_up = False
+            if notes.dictating() and _misses < 3:                  # fix 82: thinking in the middle of a note
+                _misses += 1
+                say("I'm still listening for your note. Say: end note, when you're done.", "📝 notes (on device)",
+                    tone="gentle")
+                follow_up = True
+                continue
+            if kidmode.on(memory) and kidmode.waiting() and _misses < 4:   # fix 78: a child thinking
+                _misses += 1
+                say(kidmode.nudge(_misses), "🧸 kid mode (on device)", tone="gentle")
+                follow_up = True
+                continue
+            if follow_up and _misses < 2:                 # fix 32: a noise in a conversation doesn't end it
+                _misses += 1
+                continue
+            follow_up, _misses = False, 0
             continue
 
-        print(f"You: {text}")
+        print(f"You: {hindi.shown(text)}")                # fix 97: the Hindi you said (and what it became)
+        phone.on_heard(hindi.LAST["heard"] or text)       # fix 83
+        _misses = 0                         # fix 32
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        _hc = hindi.command(text, memory)              # fix 97: "speak in Hindi" / "speak English"
+        if _hc:
+            say(_hc, "🇮🇳 language (on device)")
+            follow_up = True
+            continue
+        _hr = hearing.process(text, memory, _last_said)   # fix 88, 90: "tubular list" -> to-do, "take water plans" -> ask first
+        if _hr.get("say"):
+            say(_hr["say"], "👂 did you mean (on device)")
+            follow_up = True
+            continue
+        text = _hr["text"]
+        _ra = remindai.answer(text, reminders)          # fix 93: yes / no / "make it 7" to "Should I set it?"
+        if _ra:
+            say(_ra, "⏰ reminders: AI understood, code checked, you confirmed (on device)")
+            follow_up = True
+            continue
         # "I said ...", "I want you to remember ...", "Can you please add ...": straight to the command
-        text = re.sub(r"^(?:i said|i mean|i asked|i'?m saying|i am saying|i'?m asking)[,\s]+", "", text, flags=re.I)
+        text = re.sub(r"^(?:i said|i mean|i asked|i'?m saying|i am saying|i'?m asking|i am asking)[,\s]+", "", text, flags=re.I)
+        text = re.sub(r"\bwhat(?:'s| is) there (in|on) my\b", r"what is \1 my", text, flags=re.I)   # fix 32: what is there in
         text = re.sub(r"^(?:(?:i want you to|i'd like you to|i need you to|can you|could you|will you|would you|please)\s+)+"
                       r"(?=(?:remember|add|put|remove|delete|clear|set|share|send|log|cancel|show|close)\b)",
                       "", text, flags=re.I)
@@ -1957,7 +2680,8 @@ def main():
         if m_buy and not re.search(r"\b(?:list|online|where|how|why|when|gift|present|ticket)\b", m_buy.group(1), re.I):
             text = f"add {m_buy.group(1)} to my grocery list"
         if re.fullmatch(r"(?:\w+\s+){0,2}(?:the\s+)?time(?:\s+(?:is it|now|please))?(?:\s+\w+){0,4}[.?!]*", text, flags=re.I) \
-                and not re.search(r"\b(?:focus|timer|break|spend|free|long|first|last|next|every|some|this|that|good time|no see)\b",
+                and not re.search(r"\b(?:focus|timer|break|spend|free|long|first|last|next|every|some|this|that|good time|no see"
+                                  r"|my|meeting|appointment|reminder|class|call|left|remaining)\b",
                                   text, re.I):
             text = "what time is it"
         # "I'm Krati back" / "Krati is back" / "it's Krati" while a guest is talking -> the user is back
@@ -1983,8 +2707,10 @@ def main():
                       "I bought", text, flags=re.I)
         text = re.sub(r"\b(?:my toes|to matters|two matters|tomatos)\b", "tomatoes", text, flags=re.I)
         text = re.sub(r"\bperiods\b", "period", text, flags=re.I)
+        text = re.sub(r"^do i have (?:any |a )?(friend|sister|brother|cousin|colleague)s?\b[?.!]*$", r"who are my \1s",
+                      text, flags=re.I)   # fix 33: do I have friends
         text = re.sub(r"^(?:i (?:want|would like|need) to|let'?s|let me)\s+(?=(?:add|put|remove)\b)", "", text, flags=re.I)
-        text = re.sub(r"^(add|put)\s+(?:to|in|into|on)\s+(?:my\s+|the\s+)?([a-z]+)(?:\s+list)?[,:]?\s+(.+?)[.!]*$",
+        text = re.sub(r"^(add|put)\s+(?:to|in|into|on)\s+(?:my\s+|the\s+)?(?![a-z ]*\bnotes?\b)([a-z]+)(?:\s+list)?[,:]?\s+(.+?)[.!]*$",   # fix 82
                       lambda m: f"{m.group(1)} {m.group(3)} to my {m.group(2)} list", text, flags=re.I)
         text = re.sub(r"^(?:tell me |show me )?what(?:'s| is)(?: there)? (?:in|on) my (?:tasks?|to-?dos?)(?: list)?[?.!]*$",
                       "show my task list", text, flags=re.I)
@@ -2002,6 +2728,9 @@ def main():
         text = re.sub(r"^format period\b", "for my period", text, flags=re.I)
         text = re.sub(r"(\bperiod reminders?\b.*\bsay),\s*", r"\1 ", text, flags=re.I)
         text = re.sub(r"\b(headache|cramp|migraine|craving|mood swing)(?= before my period)", r"\1s", text, flags=re.I)
+        text = re.sub(r"\bmy period (?:is|was|has) started\b", "my period started", text, flags=re.I)
+        text = re.sub(r"^(?:ok(?:ay)?,?\s*)?(?:jarvis,?\s*)?(?:please\s+)?(?:get|go|come|be|turn) (?:back )?online[.!]*$", "offline mode off", text, flags=re.I)
+        text = re.sub(r"^(?:ok(?:ay)?,?\s*)?(?:jarvis,?\s*)?(?:please\s+)?(?:go|get|be|turn) offline[.!]*$", "offline mode on", text, flags=re.I)
         text = re.sub(r"\bI burn (my|the)\b", r"I burned \1", text, flags=re.I)
         text = re.sub(r"\b(?:screened|sprayed|sprang|spring) my (ankle|wrist|foot|knee)\b", r"sprained my \1", text,
                       flags=re.I)
@@ -2028,6 +2757,17 @@ def main():
                 and not re.search(r"\b(?:to|in|into|on|list)\b", text, re.I):
             text = text.rstrip(" .!") + " to my grocery list"
         dashboard.update(last_heard=text, last_reply="", route="", confidence=None)
+        # ----- fix 74: learning from corrections, and how to say names -----
+        _lr = None if (_guest or kidmode.on(memory)) else learn.handle(text, memory, reminders, is_unsafe)
+        if _lr:
+            say(_lr["say"], "🧠 learned (on device)")
+            if not _lr.get("rerun"):
+                learn.remember_heard(text)
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+            text = _lr["rerun"]                                   # carry on with what was really meant
+            dashboard.update(last_heard=text)
+        learn.remember_heard(text)
 
        # Never help hurt anyone: a calm, firm answer from code (never the LLM, never online)
         if HARM_INTENT.search(text.lower()) and not HARM_EXCLUDE.search(text.lower()):
@@ -2052,6 +2792,65 @@ def main():
             dashboard.update(emergency=help_["banner"])
             say(help_["say"], "🚨 emergency help (offline)", tone=help_["tone"])
             follow_up, follow_count, chime_next = True, 0, False    # stay with the user
+            continue
+
+        # ----- fix 76: kid-safe play mode (emergencies above still work) -----
+        if kidmode.STATUS_Q.search(text.lower()):                  # fix 80: a question, not a command
+            say("Yes, kid mode is on. A grown-up can turn it off with the PIN." if kidmode.on(memory)
+                else "No, kid mode is off.", "🧸 kid mode (on device)")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+        if not kidmode.on(memory) and kidmode.ON.search(text.lower()):
+            if _guest:
+                say("Only the owner can turn on kid mode.", "🔐 guest mode: not allowed", tone="gentle")
+            elif not memory.get_setting("pin_hash"):
+                say("First, a grown-up should create a PIN on my screen. Only that PIN can turn kid mode off.",
+                    "🧸 kid mode (on device)")
+                ask_pin("kidon", None, memory)
+            else:
+                memory.set_setting("kid_prev_offline", "on" if _offline_mode else "off")
+                _offline_mode = True                                  # nothing goes online while a child uses me
+                memory.set_setting("offline_mode", "on")
+                dashboard.update(kid_mode=True, offline_mode=True)
+                say(kidmode.turn_on(memory), "🧸 kid mode (on device)", tone="bright")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
+        if kidmode.on(memory):
+            _kid = kidmode.handle(text, memory)
+            if _kid == "off":
+                ask_pin("kidoff", None, memory)
+                continue
+            if _kid and _kid.get("story"):                     # fix 77
+                tell_story(*_kid["story"])
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+            if _kid:
+                if _kid.get("card"):
+                    dashboard.update(activity=_kid["card"])
+                say(_kid["say"], "🧸 kid mode (on device)", tone="bright")
+                follow_up, follow_count, chime_next = True, 0, False
+                continue
+
+        # ----- fix 82: notes (kept in the encrypted memory; never for guests or in kid mode) -----
+        _nt = None if (_guest or kidmode.on(memory)) else notes.handle(text, memory, is_unsafe)
+        if _nt:
+            if _nt.get("pin"):
+                ask_pin("delnote", _nt["pin"], memory)
+                continue
+            if _nt.get("share"):
+                _t, _lines, _checks = _nt["share"]
+                url, svg = share_list(_t, _lines, checks=_checks)
+                if not url:
+                    say("I need to be on Wi-Fi to send it to your phone. It only travels over your own Wi-Fi, "
+                        "never the internet.", "📤 share (no network)")
+                    continue
+                print(f"📤 Shared over this Wi-Fi only, for 10 minutes: {url}")
+                dashboard.update(activity={"title": f"📤 {_t}", "lines": ["Scan with your phone (same Wi-Fi)",
+                                           "Save as PDF from there"], "qr": svg, "expires": time.time() + 120})
+            elif _nt.get("card"):
+                dashboard.update(activity=_nt["card"])
+            say(_nt["say"], "📝 notes (on device)")
+            follow_up, follow_count, chime_next = True, 0, False
             continue
 
  
@@ -2123,6 +2922,8 @@ def main():
             follow_up = False
             continue
         _sec = next((k for k, pat in FEATURE_SECTIONS if re.search(pat, lower_f)), None)
+        if _sec not in ("wellbeing", "games") or re.search(r"\bmy\b", lower_f):   # fix 32: card only for wellbeing and games
+            _sec = None
         if re.search(r"\b(?:features?|capabilit\w*|what (?:all |else )?can you do|things you can do"
                      r"|what (?:all )?(?:can|do) you (?:help|offer))\b", lower_f) or (_sec and not is_active() and re.search(
                      r"\bwhat (?:all |else )?can (?:i|we) do\b|\bhow (?:do i|to|can i) use\b|\boptions?\b"
@@ -2200,7 +3001,9 @@ def main():
             continue
 
         # Plans and progress over a period: "What's planned next week?", "What did I do this week?"
-        period_reply = None if _guest else handle_period(text, memory)
+        period_reply = None if (_guest or todo.FREE.search(text.lower())
+                                or re.search(r"\bto-?\s?do\b|\btasks?\b", text.lower())) \
+            else handle_period(text, memory)                 # fix 52 / fix 54: to-do questions go to the to-do list
         if period_reply:
             say(period_reply, "📅 plans & progress (on device)")
             follow_up, follow_count, chime_next = True, 0, False
@@ -2259,7 +3062,8 @@ def main():
                 tone="bright")
             follow_up, follow_count, chime_next = True, 0, False
             continue
-        skip_game = bool(re.search(r"\bhow are you\b|\bjoke\b", low)) and not re.search(r"\b\d\b", low)
+        skip_game = (bool(re.search(r"\bhow are you\b|\bjoke\b", low)) and not re.search(r"\b\d\b", low)) \
+            or bool(START_OVER.search(low))   # fix 33
 
         plan = handle_focus(text, memory)
         if plan:
@@ -2317,6 +3121,9 @@ def main():
         # Waiting for yes/no on a name change?
         if _pending_name:
             name, _pending_name = _pending_name, None
+            if re.match(r"(yes|yeah|yep|sure|ok|okay|please)\b", text.lower()):   # fix 35: PIN on the screen
+                ask_pin("name", name, memory)
+                continue
             if re.match(r"(yes|yeah|yep|sure|ok|okay|please)\b", text.lower()):
                 memory.set_setting("user_name", name)
                 print(f"🙂 User name set: {name}")
@@ -2347,6 +3154,10 @@ def main():
             _after = text[m_name.start(1):].lower()
             _sp = spelled_word(_after) if SPELLED.match(_after) else None      # "call me K R A T I"
             new_ = (_sp or m_name.group(1)).title()
+            _cur34 = memory.get_setting("user_name")
+            if _cur34 and _cur34.lower() != new_.lower():   # fix 35: PIN on the screen first
+                ask_pin("name", new_, memory)
+                continue
             memory.set_setting("user_name", new_)
             _pending_name, _guest = None, None
             print(f"🙂 User name set: {new_}")
@@ -2383,14 +3194,26 @@ def main():
                     continue
 
         # 0. Daily summary (Python only, plus weather)
-        if SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower()):
+        if (SUMMARY_Q.search(text.lower()) or MORE_SUMMARY.search(text.lower())) \
+                and not todo.EVENING_Q.search(text.lower()):                  # fix 52
             parts = [build_summary(memory, reminders, weather=lambda: None)]   # your day first
+            _tl = None if _guest else todo.summary_line(memory)              # fix 52: tasks too
+            if _tl:
+                parts.append(_tl)
             focus_line = focus_summary_line()
             if focus_line:
                 parts.append(focus_line)                                       # then what you've done
             weather_line = summary_weather(memory)
+            _dl = None if (_offline_mode or _guest) else environment.day_line(memory)   # fix 58
+            if _dl:
+                weather_line = (weather_line + " " + _dl) if weather_line else _dl
             if weather_line:
                 parts.append(weather_line)                                     # weather last
+            if not _guest:                                                     # fix 52: the Today card
+                dashboard.update(activity=todo.card(memory, reminders))
+                _cq = todo.carry_question(memory)
+                if _cq:
+                    parts.append(_cq)
             say(" ".join(parts), "☀️ daily summary (on device + weather)", tone="bright")
             continue
 
@@ -2413,6 +3236,50 @@ def main():
         # 1. Exact commands (fast, no LLM)
         if handle_command(text, memory, history, reminders):
             continue
+        # ----- Fix 40: "when is my doctor's appointment?": look in the reminders and the schedule -----
+        lower_w = text.lower().strip(" ?.!")
+        if not _guest and re.match(r"(?:when|what time|at what time|what day|which day)\b", lower_w) \
+                and not re.search(r"\b(?:time is it|is it now|today'?s date)\b", lower_w):
+            from reminders import when_words
+            _stop = {"when", "what", "time", "day", "which", "is", "was", "are", "were", "my", "the", "with", "do",
+                     "did", "does", "have", "has", "got", "at", "on", "for", "of", "me", "will", "it", "there",
+                     "any", "next", "this", "and", "our", "we", "you", "tomorrow", "today", "tonight"}
+            _generic = {"meeting", "meetings", "appointment", "appointments", "call", "event", "plan", "plans",
+                        "schedule", "reminder", "reminders"}
+
+            def _words(s):
+                ws = re.findall(r"[a-z]+", re.sub(r"\[date:.*?\]", "", s.lower()).replace("'s", ""))
+                return {{"doc": "doctor", "dr": "doctor", "doctors": "doctor"}.get(w, w)
+                        for w in ws if len(w) > 2 or w in ("dr",)} - _stop
+
+            def _same(a, b):
+                return a == b or (len(a) > 3 and len(b) > 3 and (a.startswith(b) or b.startswith(a)))
+
+            asked = _words(lower_w)
+            special = asked - _generic
+
+            def _hit(s):
+                have = _words(s)
+                keys = special or (asked & _generic)
+                return bool(keys) and any(_same(a, h) for a in keys for h in have)
+
+            found_plans = []
+            for due, what, kind in reminders.upcoming():
+                if kind == "reminder" and _hit(what):
+                    found_plans.append(f"{what}, {when_words(due)}")
+            for item in memory.list_get("schedule"):
+                if _hit(item):
+                    m_d = re.search(r"\[date:\s*([^\]]+)\]", item)
+                    core = re.sub(r"\s*\[date:.*?\]", "", item).strip()
+                    if m_d:
+                        core = re.sub(r"\b(?:tomorrow|today|tonight)\b", "", core).strip(" ,")
+                        core = " ".join(core.split()) + f", on {m_d.group(1).rsplit(' ', 1)[0]}"
+                    found_plans.append(core)
+            found_plans = list(dict.fromkeys(found_plans))
+            if found_plans:
+                say("You have " + "; and ".join(found_plans[:3]) + ".", "📅 reminders and schedule (on device)")
+                continue
+
 
         # "tell me the time" / "got the time?" / "current time" -> the same as "what time is it"
         if re.search(r"\b(?:tell me|what'?s|what is|got) the (?:current )?time\b|\bcurrent time\b", text.lower()) \
@@ -2423,6 +3290,14 @@ def main():
         if re.search(r"\bwhat(?:'s| is) today\b|\bwhat day is (?:it )?today\b|\btoday'?s date\b", text.lower()):
             text = "what day is it today"
 
+        # ----- Fix 55: environment (AQI, rain timing, UV, going out, best time, drying clothes, windows) -----
+        _env = envcare.handle(text, memory, offline=_offline_mode, guest=bool(_guest))   # fix 57
+        if _env:
+            if _env.get("card"):
+                dashboard.update(activity=_env["card"])
+            say(_env["say"], "🌿 environment (Open-Meteo)")
+            continue
+
         # 2. Date and time (Python, offline). Not for "the time period of..." / "time zone" questions
         if not re.search(r"\btime (?:period|of the|zone|line|travel|machine)\b", text.lower()):
             tool_answer = answer_time_question(text)
@@ -2432,9 +3307,17 @@ def main():
 
 
 
+        # Fix 45: offline mode is on: say so at once for weather and news (never "which city?" first)
+        if _offline_mode and re.search(r"\b(?:weather|forecast|temperature|rain\w*|umbrella|news|headlines?)\b",
+                                       text.lower()) and not re.search(r"\b(?:yesterday|last (?:week|night|year))\b",
+                                                                      text.lower()):
+            say("Offline mode is on, so I'm not going online, not even for the weather or the news. "
+                "Say offline mode off, and I can check it.", "✈️ offline mode")
+            continue
         # 3. Obvious weather / news (rules). Only for real requests, never for talk about the past
-        lower_q = text.lower()
-        is_request = re.search(r"\?|^(?:what|what's|how|will|is|are|do|does|should|tell|check|give|any)\b", lower_q)
+        lower_q = re.sub(r"^(?:so|then|and|okay|ok|well|hey|accha|achha)[,\s]+", "", text.lower())   # fix 101: "so will it…"
+        is_request = re.search(r"\?|^(?:what|what's|how|will|is|are|do|does|should|tell|check|give|any)\b"
+                               r"|\b(?:news|headlines)\b", lower_q)                   # fix 101: "news from Lucknow"
         about_past = re.search(r"\b(?:last (?:week|month|year|night)|yesterday|we had|there was|it was)\b", lower_q)
         if is_request and not about_past:
             online_answer = answer_online_question(text, memory.get_setting("home_city"))
@@ -2458,8 +3341,9 @@ def main():
                 m = re.match(r"^i (?:really |also )?(?:love|like|enjoy) (.+)$",
                              t.split(" (saved on")[0].strip().rstrip("."), re.I)
                 if m:
-                    liked += [p.strip() for p in re.split(r",|\band\b", m.group(1)) if p.strip()]
-            fresh = fresh_idea(liked)
+                    liked += [p.strip() for p in re.split(r",|\band\b", m.group(1)) if p.strip()
+                              and not re.fullmatch(r"etc\.?|so on|all that|more", p.strip())]   # fix 44: etc not an idea
+            fresh = fresh_idea(liked) or random.choice(SPARE_IDEAS)
             new_only = re.search(r"\bsomething (?:new|different)\b|\bnot the usual\b", text.lower())
             if liked and not new_only:
                 reply = f"How about some {random.choice(liked)}, since you love it?"
@@ -2515,7 +3399,7 @@ def main():
                 continue
         m = re.match(r"^(?:i|i really|i also) (?:love|like|enjoy|adore)\s+(?!you\b)(.{3,80})$", text.lower().strip(" .!"))
         if m and not is_unsafe(m.group(1)):
-            _offer_remember = m.group(1)
+            _offer_remember = re.sub(r',?\s*\b(?:etc\.?|and so on|and all that|and more)\.?\s*$', '', m.group(1)).strip(' ,.') or m.group(1)   # fix 44: no etc
             say(f"That's lovely! Should I remember that you love {_offer_remember}?", "💾 remember?", tone="bright")
             continue
 
@@ -2526,7 +3410,9 @@ def main():
         names = r"my|i|me" + (f"|{re.escape(user.lower())}" if user else "")
         asks_about_user = (re.search(rf"\b(?:{names})\b", text.lower()) and re.search(
             r"\b(?:likes?|loves?|hobb\w*|favou?rite|enjoys?|prefers?|interests?|birthday|allerg\w*"
-            r"|gender|male|female|a man|a woman|how old|my age)\b", text.lower()))
+            r"|gender|male|female|a man|a woman|how old|my age)\b",
+            re.sub(r"\b(?:feel|feels|felt|feeling|look|looks|sound|sounds|seem|seems|would|i'd) like\b", " ",
+                   text.lower())))   # fix 44: feel like
         if asks_about_user and not re.match(r"^(?:i|i really|i also) (?:love|like|enjoy)", text.lower()):
             if _guest:
                 say(f"That's {user}'s private information, so I'll keep it for them.", "🔒 guest mode: kept private")
@@ -2540,7 +3426,8 @@ def main():
                     m = re.match(r"^i (?:really |also )?(love|like|enjoy|adore) (.+)$", core, re.I)
                     if m:
                         verb = m.group(1).lower()
-                        prefs.append(f"{user} {verb}s {m.group(2)}" if third else f"you {verb} {m.group(2)}")
+                        _liked = re.sub(r',?\s*\b(?:etc\.?|and so on|and all that|and more)\.?\s*$', "", m.group(2)).strip(" ,.")   # fix 44: etc never read
+                        prefs.append(f"{user} {verb}s {_liked}" if third else f"you {verb} {_liked}")
                     elif re.match(r"^my (?:favou?rite|hobb)", core, re.I):
                         prefs.append(re.sub(r"^my\b", f"{user}'s" if third else "your", core, flags=re.I))
                 prefs = list(dict.fromkeys(prefs))         # no repeats
@@ -2555,7 +3442,11 @@ def main():
                 continue
 
         own_q = re.match(r"^(?:where|when) (?:is|are|was|were|did|do) (?:my|i)\b|^what(?:'s| is| was) my\b"
-                         r"|^(?:who|which) (?:is|are|was) my\b", text.lower())
+                         r"|^(?:who|which) (?:is|are|was) my\b"
+                         r"|^(?:am|was|were|do|did|have|has|is|are) (?:i|my)\b"                    # fix 39: am I / do I / is my
+                         r"(?!.*\b(?:need|should|wear|umbrella|jacket|weather|rain|late|free|busy|online|connected"
+                         r"|meetings?|appointments?|plans?|schedule|tasks?|to-?do|class|exams?|interviews?)\b)",   # fix 53
+                         text.lower())
         if own_q and not _guest and not found:
             say("I don't have that saved. You can tell me, and I'll remember it.", "📚 memory (nothing saved)")
             continue
@@ -2619,6 +3510,9 @@ def main():
         # 5. Local LLM answer (with memories if relevant)
         # Things that rarely change go first (system, name, part of day), so Ollama can reuse what it already read
         messages = [history[0], context_message(memory)] + history[1:]
+        if kidmode.on(memory):                           # fix 76: a child: simple, kind, nothing private
+            messages = [{"role": "system", "content": kidmode.KID_PROMPT}] + history[-4:]
+            found = []
         if found:
             facts = "\n".join(f"- {t}" for _, t in found)
             print(f"📚 Using memory:\n{facts}")
@@ -2639,7 +3533,11 @@ def main():
 
         think_tick()
         start = time.time()
-        reply, confidence = think(messages)
+        _early_ok = (not _quiet and not kidmode.on(memory) and not _greeting and not found and not re.search(   # fix 64: stream
+            r"\bremind|\breminders?\b|\blist\b|\b(?:1[5-9]\d\d|20\d\d)\b|\bme (?:tomorrow|today|tonight|at \d|in \d)",
+            text.lower()))
+        reply, confidence, _early = think_early(
+            messages, (lambda s, c: early_check(s, c, text, history)) if _early_ok else None)
         reply = for_speech(reply)
         # "I'm just a friendly AI, but I'm doing well" -> "I'm doing well" (Jarvis never talks itself down)
         reply = re.sub(r"\bI'?m (?:just |only )?an? (?:\w+ )?(?:AI|bot|assistant|companion|helper|program|computer program|language model)\b"
@@ -2674,6 +3572,10 @@ def main():
             del history[1:]
             reply = "Sorry, I think I'm going in circles. Could you say that in a different way?"
             
+        reply, _why = hearing.check_reply(text, reply, memory)     # fix 88: only the code does things
+        if _why:
+            print(f"   ({_why}, replaced)")
+            looped = True                                       # keep the honest reply as it is
         print(f"🤔 Confidence: {confidence:.2f}  ({time.time() - start:.1f}s)")
         route_name = "📚 memory (on device)" if found else "🧠 local LLM"
 
@@ -2699,7 +3601,8 @@ def main():
             if re.search(r"\bmy\b", text.lower()):        # about their own life, and nothing saved
                 reply = "I don't have that saved. You can tell me, and I'll remember it."
             else:
-                reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
+                reply = ("Hmm, I'm not sure about that one. I'm in offline mode, so I can't look it up right now."
+                         if _offline_mode else "Hmm, I'm not sure about that one. Want me to look it up online?")
                 offer_lookup(text)
             route_name = "🤔 not sure (guess withheld)"
 
@@ -2707,7 +3610,8 @@ def main():
         if declined and not found and is_question and not about_assistant and not looped \
                 and confidence < 0.6 and not re.search(r"\bmy\b", text.lower()):
             print(f"   (unsure, mixed reply replaced: {reply})")
-            reply = "Hmm, I'm not sure about that one. Want me to look it up online?"
+            reply = ("Hmm, I'm not sure about that one. I'm in offline mode, so I can't look it up right now."
+                         if _offline_mode else "Hmm, I'm not sure about that one. Want me to look it up online?")
             offer_lookup(text)
             route_name = "🤔 not sure (guess withheld)"
             
@@ -2727,7 +3631,8 @@ def main():
 
         # The command parser didn't catch a reminder, so the LLM must not pretend it set one ("Got it, ...")
         if route_name.startswith(("🧠", "📚")) and re.search(
-                r"\bremind me\b|\b(?:set|add|create|make|sutter|setter)\b.*\breminders?\b", text.lower()):
+                r"\bremind me\b|\b(?:set|add|create|make|sutter|setter)\b.*\breminders?\b"
+                r"|\bme (?:tomorrow|today|tonight|at \d|in \d)", text.lower()):   # fix 53: "... me tomorrow at 5"
             print(f"   (blocked fake reminder: {reply})")
             reply = "I didn't catch that as a reminder. Say it like this: remind me at 7 pm to call my father."
             route_name = "🛡️ false promise blocked"
@@ -2751,8 +3656,10 @@ def main():
         promise = re.search(
             r"\b(i'll|i will|i've|i have|let me)\s+(?:make sure\b|"
             r"(?:remind|set|call|text|send|book|order|schedule|add|save|remove|note|check"
-            r"|clear|delete|cancel|change|update|adjust|fix|create|make|share|generate))"
+            r"|clear|delete|cancel|change|update|adjust|fix|create|make|share|generate"
+            r"|correct|move|modify|edit|reschedule|replace))"
             r"|\bi can (?:create|make|share|generate|play)\b"
+            r"|\bi(?:'ve| have)? (?:corrected|changed|updated|fixed|moved|modified|edited|rescheduled|replaced)\b"
             r"|\b(added|removed|saved|scheduled|noted|closed|cleared|deleted|created|shared|sent)\b",
             reply.lower())
         negated = re.search(r"\b(?:haven'?t|have not|didn'?t|did not|never|can'?t|cannot)\b", reply.lower())
@@ -2761,6 +3668,20 @@ def main():
             reply = "I can't do that yet, sorry. Ask me what I can do, and I'll tell you."
             route_name = "🛡️ false promise blocked"
 
+        if re.search(r"\b(?:don'?t|do not|can'?t|cannot|no|not)(?: have)? access\b", reply.lower()) \
+                and re.search(r"\b(?:personal|private|your)\b", reply.lower()):   # fix 39: not saved, not 'no access'
+            reply = "I don't have that saved yet. You can tell me, and I'll remember it."
+        if kidmode.on(memory):
+            reply = kidmode.safe_reply(reply)                  # fix 76
+        if _early:                                          # fix 64: the first sentence was already spoken
+            _e = for_speech(_early)
+            if not reply.startswith(_e):
+                if route_name.startswith("🤔"):
+                    reply = _e + " Hmm, actually I'm not fully sure about that, so please double-check it." + (
+                        "" if _offline_mode else " Want me to look it up online?")
+                else:
+                    reply = _e + " " + reply
+            _set_spoken(_e)
         history.append({"role": "user", "content": text})
         history.append({"role": "assistant", "content": reply})
         if len(history) > 1 + 2 * (HISTORY_TURNS + 2):        # trim in steps, so the model's cache stays useful

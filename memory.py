@@ -77,6 +77,14 @@ class MemoryStore:
         count += self.db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0]
         self.db.execute("DELETE FROM memories")
         self.db.execute("DELETE FROM list_items")
+        try:
+            self.db.execute("DELETE FROM todos")                     # fix 52
+        except sqlite3.OperationalError:
+            pass
+        try:
+            self.db.execute("DELETE FROM learned")                   # fix 74
+        except sqlite3.OperationalError:
+            pass
         self.db.commit()
         return count
 

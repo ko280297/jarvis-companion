@@ -14,6 +14,7 @@ TASKS_LIST = "tasks"
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 PLANS_Q = re.compile(r"\b(?:schedule|plans?|planned|calendar|meetings?|events?|coming up"
+                     r"|appointments?|class(?:es)?|exams?|interviews?|anything (?:on|planned)"   # fix 53
                      r"|what do i have|what have i got|am i free|am i busy)\b")
 WORK_Q = re.compile(r"\bwhat did i (?:do|get done|work on|achieve)\b|\b(?:work|focus|progress) (?:summary|report)\b"
                     r"|\bhow did i do\b|\bsummary of (?:this|last|the|my) (?:week|month)\b"
@@ -103,6 +104,15 @@ def _focus_rows(start, end):
 
 def plans_text(memory, start, end, label):
     items = [(d, txt) for d, txt in _dated_items(memory) if start <= d <= end]
+    try:                                                   # fix 53: reminders are plans too
+        for due_ts, txt in memory.db.execute("SELECT due, text FROM reminders WHERE done = 0 AND kind = 'reminder'"):
+            when = datetime.fromtimestamp(due_ts)
+            if start <= when.date() <= end:
+                clock = when.strftime("%I:%M %p").lstrip("0").replace(":00", "")
+                items.append((when.date(), f"{txt}, at {clock}"))
+        items.sort(key=lambda x: x[0])
+    except sqlite3.OperationalError:
+        pass
     items = list(dict.fromkeys((d, txt.rstrip(".")) for d, txt in items))   # no repeats, no double full stops
     if not items:
         return f"You don't have anything on your schedule {label}."
@@ -146,7 +156,7 @@ def work_text(memory, start, end, label):
 def handle_period(text, memory):
     """Returns a reply for questions about plans or progress over a period, otherwise None."""
     lower = text.lower().strip(" .!?,")
-    if re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put|remove|delete|cancel|set|create|schedule)\b", lower):
+    if re.match(r"^(?:please\s+)?(?:can you\s+)?(?:add|put|remove|delete|cancel|set|create|schedule|remind|remember|save|note)\b", lower):
         return None                                    # a command to change the schedule, not a question about it
     period = parse_period(lower)
     if not period:

@@ -2,6 +2,7 @@
 Two ways in: fast exact commands (regex), and an LLM tool router for natural phrasing.
 Either way, the CODE does the actual work and checks every argument."""
 import re
+import time   # fix 72
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -170,6 +171,9 @@ def _add(memory, name, item):
     if is_unsafe(item):
         return REFUSAL
     _last_list = name
+    if name in ("task", "to do", "todo", "to-do", "to dos", "todos"):   # fix 52: to-do list
+        import todo
+        return todo.add_task(memory, item)
     if name == "schedule":
         item = resolve_dates(item)      # Python works out the real date
         memory.list_add(name, item)
@@ -191,10 +195,10 @@ def _add(memory, name, item):
             already.append(thing)
         else:
             memory.list_add(name, f"{qty} {thing}" if qty else thing)
-            added.append(thing)
+            added.append(f"{qty} {thing}" if qty else thing)          # fix 104: "Added 2 kg of rice", not "kg of rice"
     said = []
     if added:
-        said.append(f"Added to your {name} list.")
+        said.append(f"Added {', '.join(added)} to your {name} list.")      # fix 99: always say WHAT was added
     if more:
         said.append(f"You now have {', '.join(more)} on your {name} list.")
     if already:
@@ -205,6 +209,9 @@ def _add(memory, name, item):
 
 def _read(memory, name):
     global _last_list
+    if name in ("task", "to do", "todo", "to-do", "to dos", "todos"):   # fix 52: read the to-do list
+        import todo
+        return todo.handle_todo("what's on my to-do list", memory, todo.REMINDERS)["say"]
     if name not in memory.list_names():
         return f"Your {name} list is empty."
     _last_list = name
@@ -237,10 +244,145 @@ def _clear(memory, name):
     return f"You don't have a {name} list." if name else "Which list should I clear?"
 
 
+# ----- fix 72: change an item on a list, move a schedule item to another time or day, "undo" -----
+_undo = None             # {"t", "rows": [(id, list, old item)]}
+_pick = None             # {"t", "rows": [(id, list, item)], "kind", "new"}
+_TODO_NAMES = {"task", "tasks", "to do", "todo", "to-do", "to dos", "todos"}
+EDIT_ITEM = re.compile(rf"^(?:change|replace|edit|update|correct|swap)\s+(?:the\s+)?(.+?)\s+(?:to|with|into|for)\s+(.+?)"
+                       rf"(?:\s+(?:on|in)\s+{_LIST})?$")
+MOVE_EVENT = re.compile(r"^(?:move|shift|change|reschedule|push|postpone|prepone|make)\s+(?:the\s+|my\s+)?(.+?)\s+"
+                        r"(?:to|till|until|for)\s+(.+)$")
+UNDO_EDIT = re.compile(r"^(?:no,? )?(?:undo(?: (?:it|that))?|change it back|put it back)$")
+TIME_RE = re.compile(r"\b(?:at\s+)?\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)(?=\W|$)|\bat\s+\d{1,2}(?:[:.]\d{2})?\b",
+                     re.I)
+_STOPW = {"the", "my", "list", "item", "and", "for", "with", "from", "this", "that", "please", "instead"}
+
+
+def _wordset(s):
+    return {w[:-1] if w.endswith("s") and len(w) > 4 else w
+            for w in re.findall(r"[a-z]+", re.sub(r"\[date:.*?\]", "", s.lower())) if len(w) > 2} - _STOPW
+
+
+def _items(memory, name=None):
+    q = "SELECT id, list, item FROM list_items" + (" WHERE list = ?" if name else "") + " ORDER BY id"
+    return [r for r in memory.db.execute(q, (name,) if name else ()).fetchall() if r[1] not in _TODO_NAMES]
+
+
+def _find_items(memory, said, name=None, only=None):
+    """Items the user means: same thing ('milk' = 'Milk', '2 apples' = 'apples'), or all the words said."""
+    words = _wordset(said)
+    if not words:
+        return []
+    rows = _items(memory, name)
+    if only:
+        rows = [r for r in rows if r[1] == only]
+    same = [r for r in rows if _key(_split_qty(re.sub(r"\s*\[date:.*?\]", "", r[2]))[1]) == _key(_split_qty(said)[1])]
+    return same or [r for r in rows if words <= _wordset(r[2])]
+
+
+def _moved_text(item, new):
+    """'dentist on Friday at 5 pm [date: ...]' + 'Saturday' -> 'dentist on Saturday at 5 pm [date: ...]'."""
+    from todo import _DAYWORD
+    base = re.sub(r"\s*\[date:.*?\]", "", item)
+    tag = re.search(r"\[date: \w+, (\d{1,2} \w+ \d{4})\]", item)
+    new_day = re.search(rf"\b({_DAYWORD})\b", new, re.I)
+    new_time = TIME_RE.search(new)
+    if not new_day and not new_time:
+        return None
+    rest = re.sub(rf"\s*\b(?:on\s+)?(?:the\s+)?(?:{_DAYWORD})\b(?:,?\s+\d{{4}})?", "", base, flags=re.I)
+    old_time = TIME_RE.search(rest)
+    rest = " ".join(TIME_RE.sub("", rest).split()).strip(" ,.")
+    rest = re.sub(r"\s+(?:at|on)$", "", rest)
+    if new_day:
+        d = new_day.group(1)
+        day = d if re.match(r"(?:today|tonight|tomorrow|day after)", d, re.I) else f"on {d[:1].upper() + d[1:]}"
+    elif tag:                                             # same day: say it the way people do
+        from datetime import date as _d, datetime as _dt
+        old_d = _dt.strptime(tag.group(1), "%d %B %Y").date()
+        day = f"on {old_d:%A}" if 0 <= (old_d - _d.today()).days < 7 else f"on {old_d.day} {old_d:%B}"
+    else:
+        day = ""
+    t = new_time.group(0) if new_time else (old_time.group(0) if old_time else "")
+    if t and not t.lower().startswith("at"):
+        t = "at " + t
+    return resolve_dates(" ".join(x for x in (rest, day, t) if x))
+
+
+def _edit_done(memory, rows, kind, new):
+    global _undo, _pick
+    _pick = None
+    _undo = {"t": time.time(), "rows": [(r[0], r[1], r[2]) for r in rows]}
+    for mod, attr in (("memfix", "LAST"), ("todo", "_undo")):   # "undo" now means this change
+        try:
+            setattr(__import__(mod), attr, None)
+        except ImportError:
+            pass
+    rid, name, old = rows[0]
+    if kind == "move":
+        new_item = _moved_text(old, new)
+        memory.db.execute("UPDATE list_items SET item = ? WHERE id = ?", (new_item, rid))
+        memory.db.commit()
+        return (f"Moved: {_spoken_item(new_item)}. It was {_spoken_item(old)}. Say undo if that's wrong.")
+    if is_unsafe(new):
+        _undo = None
+        return REFUSAL
+    new_item = resolve_dates(new) if name == "schedule" else new
+    memory.db.execute("UPDATE list_items SET item = ? WHERE id = ?", (new_item, rid))
+    memory.db.commit()
+    return f"Done: {_spoken_item(new_item)} instead of {_spoken_item(old)}, on your {name} list. Say undo if that's wrong."
+
+
+def _ask(rows, kind, new):
+    global _pick
+    _pick = {"t": time.time(), "rows": rows[:3], "kind": kind, "new": new}
+    return ("Which one: " + "; ".join(f"{i + 1}. {_spoken_item(r[2])} ({r[1]} list)" for i, r in enumerate(rows[:3]))
+            + "? Say the first, the second, or the third.")
+
+
+def edit_command(clean, lower, memory):
+    """A reply if this changes a list item or moves a schedule item, else None (other features get it)."""
+    global _undo, _pick
+    if UNDO_EDIT.match(lower):
+        if not _undo or time.time() - _undo["t"] > 120:
+            return None
+        u, _undo = _undo, None
+        for rid, name, item in u["rows"]:
+            memory.db.execute("UPDATE list_items SET item = ? WHERE id = ?", (item, rid))
+        memory.db.commit()
+        return f"Okay, I've put it back: {_spoken_item(u['rows'][0][2])}."
+    if _pick and time.time() - _pick["t"] < 120:
+        m = re.search(r"\b(first|1st|one|second|2nd|two|third|3rd|three)\b", lower)
+        if m and len(lower.split()) <= 5:
+            i = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1}.get(m.group(1), 2)
+            p = _pick
+            if i < len(p["rows"]):
+                return _edit_done(memory, [p["rows"][i]], p["kind"], p["new"])
+    if re.search(r"\b(?:reminders?|alarms?|timers?|voice|volume|city|name|pin|birthday|password)\b", lower):
+        return None
+    m = MOVE_EVENT.match(lower)
+    if m and _moved_text("x", m.group(2)):
+        hits = _find_items(memory, m.group(1), only="schedule")
+        if hits:
+            return _edit_done(memory, hits, "move", m.group(2)) if len(hits) == 1 else _ask(hits, "move", m.group(2))
+    m = EDIT_ITEM.match(lower)
+    if m:
+        name = match_list(m.group(3), memory) if m.group(3) else None
+        new = clean[m.start(2):m.end(2)].strip(" .,")
+        hits = _find_items(memory, m.group(1), name if name in memory.list_names() else None)
+        if hits and new:
+            kind = "move" if hits[0][1] == "schedule" and _moved_text("x", new) and len(new.split()) <= 4 else "rename"
+            return _edit_done(memory, hits, kind, new) if len(hits) == 1 else _ask(hits, kind, new)
+    return None
+
+
 # ---------- Fast path ----------
 def _one_command(sentence, memory):
     clean = FILLER.sub("", sentence.strip(" .!?,"))
     lower = clean.lower()
+
+    _ed = edit_command(clean, lower, memory)          # fix 72
+    if _ed:
+        return _ed
 
     m = CAPTURE.match(lower)
     if m:
@@ -254,6 +396,8 @@ def _one_command(sentence, memory):
         weak_verb = not re.search(r"\b(add|put)\b", m.group(1))     # only "and"/"at"
         if weak_verb and name not in _known_lists(memory):
             return None      # "and ... in my list" might not be an add at all
+        if name and name not in _known_lists(memory) and not re.search(r"\blists?\b", lower):
+            return None      # fix 104: "add 2 kg of rice to the rice" is not a new "rice" list: main.py asks
         if re.match(r"(what|who|how|where|when|why)\b", item.lower()):
             return None      # it's a question, not an item
         return _add(memory, name or _classify(item, memory), item)
@@ -296,6 +440,8 @@ def run_list_tool(name, args, memory):
     if len(item) > MAX_ITEM_LENGTH:
         return "That's a bit long for a list item. Could you say it shorter?"
 
+    if name == "add_to_list" and re.search(r"\blists?\b", item, re.I):     # fix 88: a list's name, not an item
+        return "That sounds like the name of a list, not something to add. What should I add, and to which list?"
     if name == "add_to_list":
         if not item:
             return "What should I add?"

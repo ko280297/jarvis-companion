@@ -184,8 +184,98 @@ def _save(item, memory):
     if item["kind"] == "event":
         memory.list_add(SCHEDULE_LIST, f"{item['text']} [date: {item['when']}]" if item["when"] else item["text"])
         return "your schedule"
-    memory.list_add(TASKS_LIST, item["text"] + (f" (by {item['when']})" if item["when"] else ""))
-    return "your tasks"
+    import todo                                                       # fix 52: tasks go to the to-do list
+    todo.add_task(memory, item["text"], due_text=item["when"] or None)
+    return "your to-do list"
+
+
+# ----- fix 73: fix the noted items before they're saved -----
+_ORD = r"first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last"
+_ORDN = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "fourth": 3, "4th": 3, "fifth": 4, "5th": 4}
+EDIT_IT = re.compile(r"^(?:no,?\s+)?(?:change|make|rename|correct|edit|update)\s+(?:it|this|that)\s+(?:to|into|as)\s+(.+)$"
+                     r"|^(?:no,?\s+)?(?:save|add|keep)\s+it\s+as\s+(.+)$")
+EDIT_NTH = re.compile(rf"^(?:change|make|rename|correct|edit|update)\s+(?:the\s+|number\s+)?({_ORD}|\d)(?:\s+one)?"
+                      r"\s+(?:to|into|as)\s+(.+)$")
+DROP_NTH = re.compile(rf"^(?:remove|delete|skip|drop)\s+(?:the\s+|number\s+)?({_ORD}|\d)(?:\s+one)?$")
+LIST_ALL = re.compile(r"\b(?:read (?:them|all|the list|everything)|what (?:did|have) you (?:note|notice)d?"
+                      r"|list them|all of them|what are they)\b")
+
+
+def _nth(word, n):
+    if word == "last":
+        return n - 1
+    return int(word) - 1 if word.isdigit() else _ORDN.get(word, 99)
+
+
+def _when_only(new):
+    """'Friday' / '5 pm' / 'Friday at 5 pm': only a new day or time, not a new name."""
+    rest = DATE_PHRASE.sub("", TIME_PHRASE.sub("", new)).strip(" ,.")
+    rest = re.sub(r"^(?:on|at|by|to)$", "", rest, flags=re.I)
+    return not rest and bool(WHEN.search(new) or _clock(new))
+
+
+def _edit_item(item, new):
+    new = new.strip(" .,")
+    if _when_only(new):
+        m = re.search(r"\[date: (.*?)\]", resolve_dates(new))
+        if m:
+            item["when"] = m.group(1)
+        c = _clock(new)
+        if c:
+            item["text"] = re.sub(r"\s+at\s+\d{1,2}(?::\d{2})?(?:\s*[AP]M)?$", "", item["text"]) + f" at {c}"
+        return
+    owner = re.match(r"^([A-Z][a-z]+):\s+", item["text"])
+    old_time = re.search(r"\s+at\s+\d{1,2}(?::\d{2})?(?:\s*[AP]M)?$", item["text"])
+    text = new[:1].upper() + new[1:]
+    if old_time and not _clock(new):
+        text += old_time.group(0)                          # a new name keeps the time
+    if owner and not re.match(r"^[A-Z][a-z]+:", text):
+        text = f"{owner.group(1)}: {text[:1].lower() + text[1:]}"
+    item["text"] = text
+
+
+def _describe(item):
+    return item["text"] + (f", {'on' if item['kind'] == 'event' else 'by'} {item['when']}" if item["when"] else "")
+
+
+def _review_edit(lower, text, memory):
+    """While asking about the noted items: change it / change the second one / remove the last one / read them."""
+    global _review, _unclear
+    raw = text.strip().rstrip(".!?")
+    m = EDIT_IT.match(lower)
+    if m:
+        new = raw[m.start(1):m.end(1)] if m.group(1) else raw[m.start(2):m.end(2)]
+        if is_unsafe(new):
+            return [_say("I can't save that.")]
+        _edit_item(_review[0], new)
+        _unclear = 0
+        if m.group(2):                                         # "save it as ..." = change and save
+            where = _save(_review[0], memory)
+            _review.pop(0)
+            return [_say(f"Added to {where}.")] + _ask_next(memory)
+        kind = "your schedule" if _review[0]["kind"] == "event" else "your tasks"
+        return [("screen", meeting_screen()), _say(f"Okay: {_describe(_review[0])}. Should I save it to {kind}?")]
+    m = EDIT_NTH.match(lower)
+    if m:
+        i = _nth(m.group(1), len(_review))
+        if i >= len(_review):
+            return [_say(f"There are only {len(_review)} left. Say: read them all, to hear them.")]
+        new = raw[m.start(2):m.end(2)]
+        if is_unsafe(new):
+            return [_say("I can't save that.")]
+        _edit_item(_review[i], new)
+        return [_say(f"Changed number {i + 1} to: {_describe(_review[i])}.")] + _ask_next(memory)
+    m = DROP_NTH.match(lower)
+    if m:
+        i = _nth(m.group(1), len(_review))
+        if i >= len(_review):
+            return [_say(f"There are only {len(_review)} left.")]
+        gone = _review.pop(i)
+        return [_say(f"Okay, removed: {gone['text']}.")] + _ask_next(memory)
+    if LIST_ALL.search(lower):
+        return [_say("I noted: " + "; ".join(f"{i + 1}. {_describe(x)}" for i, x in enumerate(_review)) + ".")] \
+            + _ask_next(memory)
+    return None
 
 
 def meeting_chunk(text, memory):
@@ -221,6 +311,9 @@ def handle_meeting(text, memory):
 
     if _review:
         item = _review[0]
+        _ed = _review_edit(lower, text, memory)          # fix 73
+        if _ed:
+            return _ed
         if END_REVIEW.search(lower):
             _review, _found = [], []
             return [("screen", None), _say("Okay, I won't save the rest. Nothing else was kept.")]
