@@ -79,6 +79,8 @@ import hindi   # fix 97: Hindi, fully on device
 import prep   # fix 108: prepare me before things
 import barge  # fix 112: "Hey Jarvis" while I'm speaking stops me
 import followup  # fix 113: follow-up tracker (waiting for someone, or a promise you made)
+import recall    # fix 114: recall coach (flashcards from your notes)
+import speaking  # fix 115: speaking practice (time, pace, filler words; nothing recorded)
 dictionary.warm()
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
@@ -2630,10 +2632,11 @@ def main():
 
 
         venting = vent_mode()
-        audio = listen(wake, reminders, follow_up or venting,
-                       max_seconds=60 if venting else MAX_RECORD_SECONDS,
-                       silence=4.0 if venting else SILENCE_TO_STOP,
-                       timeout=45 if venting else (20 if is_active() else FOLLOW_UP_SECONDS))   # games: time to think
+        practising = speaking.waiting_answer()          # fix 115: an answer of up to 2 minutes, with thinking pauses
+        audio = listen(wake, reminders, follow_up or venting or practising,
+                       max_seconds=120 if practising else 60 if venting else MAX_RECORD_SECONDS,
+                       silence=4.0 if (venting or practising) else SILENCE_TO_STOP,
+                       timeout=30 if practising else 45 if venting else (20 if is_active() else FOLLOW_UP_SECONDS))
         if isinstance(audio, str):       # a reminder, or focus/break time, is due: handled at the top
             continue
         if audio is None:
@@ -2652,7 +2655,11 @@ def main():
         _TIMING["record_s"] = round(len(audio) / SAMPLE_RATE, 1)
         text = transcribe(stt, audio, memory)
         _TIMING["stt_s"] = round(time.time() - _turn_start, 2)
-        _hin = hindi.understand(text)                  # fix 97: Hindi (spoken or typed) -> English, checked
+        _speak_secs = speaking.voiced_seconds(audio) if speaking.waiting_answer() else None   # fix 115: only counted
+        _practice_hi = text if (_speak_secs is not None and hindi.DEV.search(text or "")) else ""  # a Hindi answer: counted in Hindi
+        if _practice_hi:
+            hindi.LAST.update(heard="", english="")
+        _hin = {"text": text} if _practice_hi else hindi.understand(text)   # fix 97: Hindi (spoken or typed) -> English
         if _hin.get("say"):
             print(f"You: {text}")
             phone.on_heard(text)
@@ -2714,6 +2721,11 @@ def main():
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        _sp = None if kidmode.is_on() else speaking.handle(text, memory, seconds=_speak_secs, heard_hindi=_practice_hi)
+        if _sp:                                        # fix 115: speaking practice (an answer can say anything)
+            say(_sp, "🎤 speaking practice (on device, nothing recorded)")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
         _fs = None if (_guest or kidmode.is_on()) else followup.settings(text, memory)   # fix 113 (before games: "start")
         if _fs:
             say(_fs, "🤝 follow-ups (on device)")
@@ -2909,6 +2921,13 @@ def main():
                 say(_kid["say"], "🧸 kid mode (on device)", tone="bright")
                 follow_up, follow_count, chime_next = True, 0, False
                 continue
+
+        # ----- fix 114: recall coach: flashcards from your notes (never for guests or in kid mode) -----
+        _rc = None if (_guest or kidmode.on(memory) or notes.dictating()) else recall.handle(text, memory)
+        if _rc:
+            say(_rc, "🧠 recall coach (on device)")
+            follow_up, follow_count, chime_next = True, 0, False
+            continue
 
         # ----- fix 82: notes (kept in the encrypted memory; never for guests or in kid mode) -----
         _nt = None if (_guest or kidmode.on(memory)) else notes.handle(text, memory, is_unsafe)

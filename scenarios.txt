@@ -717,3 +717,42 @@ what am I waiting for || !Riya
 I'm Krati || Welcome back
 stop asking me about follow-ups || won't ask
 start asking me about follow-ups again || again
+
+# Fix 114: recall coach (flashcards from your notes) and the sentences that must not trigger it
+take a note: Photosynthesis is how plants make food || Saved your note
+how many flashcards do I have || flashcards?, and \d+ (?:is|are) due today
+quiz me on photosynthesis || Question 1 of 1: What is Photosynthesis\?
+it is how plants make their food || Right!|That's the end
+quiz me on photosynthesis || Question 1 of 1
+I don't know || The answer is: how plants make food
+make a flashcard: what is the capital of Japan? Tokyo || Made a flashcard
+quiz me on Japan || What is the capital of Japan
+what time is it || It is
+quiz me on Japan || What is the capital of Japan
+stop the quiz || stop here|That's the end
+I have a test tomorrow || !Question 1
+I'm Krati's friend Meera || Hi Meera
+quiz me || !Question 1
+I'm Krati || Welcome back
+kid mode on || Kid mode is on|PIN
+@act pin_2468
+what time is it
+start a quiz || Question 1
+stop || stop
+kid mode off || PIN
+@act pin_2468
+what time is it
+
+# Fix 115: speaking practice (time, pace, filler words; nothing recorded) and what must not trigger it
+interview practice || Here's the question
+Um, so, I basically worked on, like, a data pipeline for sales at my last company || can't time it.*Filler words: [1-9]
+same question again || Here's the question
+stop practice || practice is over
+remind me to practise for my interview in 10 minutes || remind you
+my interview went well || !Here's the question
+let's practise for my viva || viva
+I have chest pain || 1 1 2|1 0 8
+I'm okay || .
+practise my presentation || Start your presentation
+Good morning everyone, today I will show you our private voice companion called Jarvis || can't time it
+what time is it || It is

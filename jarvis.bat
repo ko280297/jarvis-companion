@@ -6,8 +6,8 @@
     jarvis type         talk to Jarvis by typing
     jarvis test         the big test: shows only the score and anything that failed
                         (the full output is saved in test_result.txt)
-    jarvis checks       the 4 small tests (Hindi, hearing, reminders, phone)
-    jarvis all          the big test and the 4 small tests
+    jarvis checks       the small tests (one line each)
+    jarvis all          the big test and the small tests
     jarvis fix 109      run apply_fixes109.py
     jarvis setup        run setup_jarvis.py (downloads; add --check to only check)
     jarvis NAME.py ...  run any Jarvis file with Jarvis's own Python
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
 ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
-CHECKS = ["hindi_check.py", "hear_check.py", "remind_check.py", "phone_check.py", "barge_check.py", "followup_check.py"]
+CHECKS = ["hindi_check.py", "hear_check.py", "remind_check.py", "phone_check.py", "barge_check.py", "followup_check.py", "recall_check.py", "speaking_check.py"]
 
 
 def keep_private(name):
@@ -92,7 +92,7 @@ def main(argv):
         return 0 if small_checks() else 1
     if cmd == "all":
         a = big_test()
-        print("\nThe 4 small tests:")
+        print(f"\nThe {len(CHECKS)} small tests:")
         b = small_checks()
         print("\n🎉 Everything passed." if a and b else "\n⚠️ Something failed: send Claude the lines with ❌.")
         return 0 if a and b else 1
