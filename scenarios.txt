@@ -697,3 +697,23 @@ how can I interrupt you || Interrupting is off
 let me interrupt you || say Hey Jarvis
 let me interrupt you for a second, what time is it || !say Hey Jarvis
 I don't like being interrupted at work || !won't listen
+
+# Fix 113: follow-up tracker (waiting for someone, or a promise you made) and the sentences that must not trigger it
+I'm waiting for Arjun to send the report || Noted: you're waiting for Arjun: the report
+Rahul owes me 500 rupees || Noted: you're waiting for Rahul: 500 rupees
+I told Riya I'd send the file by Friday || Noted: you'll send the file for Riya
+what am I waiting for || Arjun.*Rahul
+what did I promise || send the file
+remind me to follow up with Arjun in 10 minutes || remind you
+add call Arjun to my to-do list || Added to your to-do list: call Arjun
+I'm waiting for the bus || !Noted
+news about Rahul || won't send it online|can't reach
+Arjun sent me a funny meme || !ticked off
+Arjun sent the report || ticked off
+change it to the final report || !Changed
+forget the Rahul one || removed
+I'm Krati's friend Meera || Hi Meera
+what am I waiting for || !Riya
+I'm Krati || Welcome back
+stop asking me about follow-ups || won't ask
+start asking me about follow-ups again || again

@@ -78,6 +78,7 @@ import remindai   # fix 93
 import hindi   # fix 97: Hindi, fully on device
 import prep   # fix 108: prepare me before things
 import barge  # fix 112: "Hey Jarvis" while I'm speaking stops me
+import followup  # fix 113: follow-up tracker (waiting for someone, or a promise you made)
 dictionary.warm()
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
@@ -994,7 +995,9 @@ def _listen_inner(wake, reminders, follow_up=False, max_seconds=MAX_RECORD_SECON
                 if checks % REMINDER_CHECK_EVERY == 0 and (
                        focus_due() or cycle_nudge_due(peek=True) or not dashboard.ACTIONS.empty()
                         or (reminders.due_now() and not is_focusing() and not meeting_active())
-                        or (prep.pending(reminders) and not is_focusing() and not meeting_active())):   # fix 108
+                        or (prep.pending(reminders) and not is_focusing() and not meeting_active())   # fix 108
+                        or (followup.waiting() and not is_focusing() and not meeting_active()
+                            and not _guest and not kidmode.is_on())):                                    # fix 113
                     return REMINDER_DUE
             ding()
             question = getattr(wake, "question", None)
@@ -1466,6 +1469,7 @@ def private_names(memory):
         m = re.search(r"\bname is (\w+)|^(\w+) is a friend of", t.split(" (saved on")[0], re.I)
         if m:
             names.add(m.group(1) or m.group(2))
+    names |= followup.names(memory)                  # fix 113: people in your follow-ups stay private too
     return {n for n in names if n}
 
 
@@ -1789,6 +1793,12 @@ def handle_command(text, memory, history, reminders):
     if _ep:
         say(_ep, "🌿 smart reminder (on device)")
         return True
+    # ----- Fix 113: follow-ups ("I'm waiting for Arjun to send the report", "I told Riya I'd send the file") -----
+    if not _guest and not kidmode.is_on():
+        _fu = followup.handle(text, memory, last_said=_last_said)
+        if _fu:
+            say(_fu, "🤝 follow-ups (on device)")
+            return True
     # ----- Fix 52: to-do list, the Today card, "when am I free?" -----
     if not _guest:
         _td = todo.handle_todo(text, memory, reminders)
@@ -2419,6 +2429,7 @@ def main():
     todo.REMINDERS = reminders                         # fix 52
     envcare.MEMORY = memory                            # fix 57
     prep.MEMORY = memory                               # fix 108
+    followup.MEMORY = memory                           # fix 113
     barge.MEMORY = memory                              # fix 112
     hearing.cleanup(memory)                               # fix 88
     remindai.URL, remindai.MODEL = OLLAMA_URL, LLM_MODEL  # fix 93: the same on-device AI
@@ -2538,6 +2549,12 @@ def main():
             if _prep and not (_guest or kidmode.is_on()):        # a guest or a child never hears your notes
                 ding()
                 say(_prep, "📋 prepare me (on device)", tone="gentle")
+                follow_up = True
+                continue
+            _fq = None if (_guest or kidmode.is_on()) else followup.due(memory)   # fix 113: "Any news from Arjun ...?"
+            if _fq:
+                ding()
+                say(_fq, "🤝 follow-up (on device)", tone="gentle")
                 follow_up = True
                 continue
         if focus_screen() and not is_active():       # keep the countdown on screen (unless a game is on)
@@ -2697,6 +2714,11 @@ def main():
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        _fs = None if (_guest or kidmode.is_on()) else followup.settings(text, memory)   # fix 113 (before games: "start")
+        if _fs:
+            say(_fs, "🤝 follow-ups (on device)")
+            follow_up = True
+            continue
         _bc = barge.command(text, memory)              # fix 112: "don't let me interrupt you" / "let me interrupt you"
         if _bc:
             say(_bc, "✋ interrupting (on device)")
