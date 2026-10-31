@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
 ENV = dict(os.environ, PYTHONIOENCODING="utf-8")
-CHECKS = ["hindi_check.py", "hear_check.py", "remind_check.py", "phone_check.py"]
+CHECKS = ["hindi_check.py", "hear_check.py", "remind_check.py", "phone_check.py", "barge_check.py"]
 
 
 def keep_private(name):

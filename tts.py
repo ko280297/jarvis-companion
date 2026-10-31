@@ -74,6 +74,19 @@ def speak(text, tone="calm"):
 
     threading.Thread(target=_make, daemon=True).start()
     out, rate = None, 22050
+    try:                                                  # fix 112: "Hey Jarvis" while I speak stops the voice
+        from barge import STOP as _stop
+    except Exception:
+        _stop = None
+    stopped = False
+
+    def _play(arr):                                       # in pieces of 0.1 s, so a stop is heard at once
+        piece = max(1, int(0.1 * rate))
+        for i in range(0, len(arr), piece):
+            if _stop is not None and _stop.is_set():
+                return False
+            out.write(arr[i:i + piece])
+        return True
     try:
         while True:
             c = made.get()
@@ -88,13 +101,18 @@ def speak(text, tone="calm"):
                 out = sd.OutputStream(samplerate=rate, channels=1, dtype="int16")
                 out.start()
                 out.write(np.zeros((int(0.15 * rate), 1), dtype=np.int16))    # lead-in: first word not swallowed
-            out.write(np.concatenate([c.audio_int16_array,
-                                      np.zeros(int(0.3 * rate), dtype=np.int16)]).reshape(-1, 1))   # 0.3 s pause
-        if out is not None:
+            if not _play(np.concatenate([c.audio_int16_array,
+                                         np.zeros(int(0.3 * rate), dtype=np.int16)]).reshape(-1, 1)):   # 0.3 s pause
+                stopped = True
+                break
+        if out is not None and not stopped:
             out.write(np.zeros((int(0.4 * rate), 1), dtype=np.int16))          # so the end isn't cut off
     finally:
         if out is not None:
-            out.stop()                                    # waits until everything has been played
+            if stopped:
+                out.abort()                               # fix 112: stop now, drop what's still waiting
+            else:
+                out.stop()                                # waits until everything has been played
             out.close()
     LAST_SYNTH_TOTAL = time.perf_counter() - _t0
 

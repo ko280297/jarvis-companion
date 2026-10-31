@@ -1,6 +1,6 @@
 # Basics, said differently
 tell me the time || It is
-what day is it tomorrow || Tuesday|October
+what day is it tomorrow || Tomorrow is \w+day, \d{1,2} \w+
 who am I || Krati
 
 # Memory, said differently
@@ -688,3 +688,12 @@ Add, add, buy stamps to my to-do list. || Added to your to-do list: buy stamps
 and what is on my to-do list || !Added
 Jarvis close the to-do list. || !don't have a to-do list
 what's on my to-do list || call the electrician
+
+# Fix 112: interrupt Jarvis with "Hey Jarvis" while it speaks (the settings; the sound part is in barge_check.py)
+let me interrupt you || say Hey Jarvis
+how do I interrupt you || Hey Jarvis
+don't let me interrupt you || won't listen
+how can I interrupt you || Interrupting is off
+let me interrupt you || say Hey Jarvis
+let me interrupt you for a second, what time is it || !say Hey Jarvis
+I don't like being interrupted at work || !won't listen

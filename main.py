@@ -77,6 +77,7 @@ import hear as hearing   # fix 88
 import remindai   # fix 93
 import hindi   # fix 97: Hindi, fully on device
 import prep   # fix 108: prepare me before things
+import barge  # fix 112: "Hey Jarvis" while I'm speaking stops me
 dictionary.warm()
 from safety import is_unsafe, REFUSAL
 from emergency import handle_emergency
@@ -481,8 +482,11 @@ SEVERE = re.compile(r"\b(?:chest pain|can'?t breathe|cannot breathe|trouble brea
 # ---------- Output ----------
 def speak(text, tone="calm"):
     """Speak aloud, unless quiet mode is on (then the screen shows it instead)."""
+    if barge.interrupted():                          # fix 112: you interrupted me: the rest of this turn stays quiet
+        return
     if not _quiet and not phone.silent():          # fix 83
-        (hindi.speak if hindi.on() else _tts_speak)(text, tone)   # fix 97: the Hindi voice in Hindi mode
+        with barge.watch(text):                      # fix 112: listen for "Hey Jarvis" while speaking
+            (hindi.speak if hindi.on() else _tts_speak)(text, tone)   # fix 97: the Hindi voice in Hindi mode
 
 
 def say(text, route, confidence=None, tone="calm"):
@@ -643,6 +647,8 @@ def play_sequence(colours, screen):
     """Memory game: light up each colour on screen while saying it, then hand over to the player."""
     print(f"   🧠 Pattern: {', '.join(colours)}")
     for i, colour in enumerate(colours):
+        if barge.interrupted():                      # fix 112: interrupted: the game waits
+            return
         dashboard.update(activity={**screen, "flash": colour, "flash_id": time.time()})
         if i == 0:
             words = f"First, {colour}."
@@ -669,6 +675,9 @@ def _run_plan_steps(plan, hear=None):
     hear(seconds) -> what the user said ('' if nothing, None if an emergency took over)."""
     global _last_ack
     for step in plan:
+        if barge.interrupted():                            # fix 112: "Hey Jarvis" over me: the exercise stops quietly
+            dashboard.update(activity=None)
+            return
         if getattr(dashboard, "STOP", None) is not None and dashboard.STOP.is_set():   # ✕ tapped on the screen: stop the exercise
             dashboard.STOP.clear()
             dashboard.update(activity=None)
@@ -691,6 +700,9 @@ def _run_plan_steps(plan, hear=None):
             started = time.time()
             speak(cue, "gentle")
             while time.time() - started < secs:
+                if barge.interrupted():                    # fix 112
+                    dashboard.update(activity=None)
+                    return
                 if not dashboard.ACTIONS.empty():          # a tap on the screen stops the exercise
                     dashboard.update(activity=None)
                     say("Okay, we'll stop here. I'm here whenever you need me.", "🌿 wellbeing (on device)", tone="gentle")
@@ -2394,6 +2406,11 @@ def main():
             openwakeword.utils.download_models()     # only needed the very first time
             wake = WakeModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
         step("wake word")
+        if "text_mode" not in sys.modules:           # fix 112: interrupt me with "Hey Jarvis" (not in typing tests)
+            barge.WAKE = wake
+            barge.OPEN = lambda: sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+                                                blocksize=CHUNK, device=pick_mic())
+            barge.CAN_LISTEN = lambda: not mic_off() and not hardware.switch_muted() and not meeting_active()
     stt = SttModel(STT_MODEL, n_threads=4, print_progress=False)
     meeting_stt = None                               # loaded the first time meeting mode starts
     step("speech to text")
@@ -2402,6 +2419,7 @@ def main():
     todo.REMINDERS = reminders                         # fix 52
     envcare.MEMORY = memory                            # fix 57
     prep.MEMORY = memory                               # fix 108
+    barge.MEMORY = memory                              # fix 112
     hearing.cleanup(memory)                               # fix 88
     remindai.URL, remindai.MODEL = OLLAMA_URL, LLM_MODEL  # fix 93: the same on-device AI
     hindi.start(memory)                                    # fix 97: Hindi was on last time: load it again
@@ -2449,6 +2467,12 @@ def main():
 
     while True:
         handle_actions(memory)
+        if barge.take():                                 # fix 112: you said "Hey Jarvis" while I was speaking
+            print("   ✋ (you interrupted me: I stopped, and I'm listening)")
+            if getattr(dashboard, "STOP", None) is not None:
+                dashboard.STOP.clear()                   # the stopped story / exercise is over; the next one is fine
+            ding()
+            follow_up, follow_count, chime_next = True, 0, False
         if _auth_ok:                                     # fix 35: the PIN on the screen was right
             job = _auth_ok
             globals()["_auth_ok"] = None
@@ -2673,6 +2697,11 @@ def main():
         stripped = strip_address(text)
         addressed = stripped != text            # the user said "Jarvis": clearly talking to me
         text = fix_command_word(stripped)
+        _bc = barge.command(text, memory)              # fix 112: "don't let me interrupt you" / "let me interrupt you"
+        if _bc:
+            say(_bc, "✋ interrupting (on device)")
+            follow_up = True
+            continue
         _pc = prep.command(text, memory, reminders)    # fix 108: "stop preparing me", "prepare me 20 minutes before"
         if _pc:
             say(_pc, "📋 prepare me (on device)")
